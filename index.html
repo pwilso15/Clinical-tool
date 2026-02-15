@@ -2056,15 +2056,6 @@ function App() {
     if (presentation) add(`  ${presentation}`);
     if (hopc.trim()) add(`  ${hopc.trim()}`);
     historyFindings.forEach(f => add(`  ${f}`));
-    // Add any child feature findings (nested from feature toggles)
-    Object.entries(childFeatures).filter(([,v])=>v!=="null").forEach(([key,state]) => {
-      const allChildren = Object.values(NESTED_FEATURES).flat();
-      const child = allChildren.find(c=>c.key===key);
-      if (child) {
-        const txt = customText[key] || (state==="safe" ? child.safe : child.unsafe);
-        add(`    ${txt}`);
-      }
-    });
     blank();
 
     // Review of Systems - build safe→unsafe lookup then output correct text
@@ -2242,7 +2233,7 @@ function App() {
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
-          model: "claude-3-5-haiku-20241022",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 1000,
           messages: [{ role: "user", content: "Write a clinical note in flowing prose paragraphs. Use ONLY this data:\n\n" + reportData }]
         })
