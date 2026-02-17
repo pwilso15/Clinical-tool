@@ -166,6 +166,254 @@ const DIAGNOSES = {
   "Palliative care review":"Uncontrolled pain, Dyspnoea emergency, Terminal agitation",
 };
 
+// Training mode: red = must-not-miss (instant fail), orange = required for complete clerking
+const TRAINING_FLAGS = {
+  "Chest pain": {
+    red: [
+      "Onset and character of pain (onset, severity, quality)",
+      "Radiation (arm, jaw, back, shoulder)",
+      "Associated diaphoresis or syncope",
+      "Exertional component",
+      "Haemodynamic symptoms (presyncope, collapse)",
+    ],
+    orange: [
+      "Duration and time course",
+      "Relieving and aggravating factors",
+      "Associated dyspnea, nausea, vomiting",
+      "Previous cardiac history or similar episodes",
+      "Cardiovascular risk factors (smoking, diabetes, hypertension, hyperlipidaemia, family history)",
+      "Medications including anticoagulants",
+      "Recent immobility or long-haul travel (PE)",
+      "Pleuritic component",
+    ],
+  },
+  "Headache": {
+    red: [
+      "Onset — thunderclap or sudden worst-ever headache",
+      "Associated fever and neck stiffness (meningism)",
+      "Focal neurological symptoms or signs",
+      "Altered consciousness or confusion",
+      "Age >50 with new headache pattern",
+      "Postural component or worsening with Valsalva",
+    ],
+    orange: [
+      "Duration, frequency and time course",
+      "Location and radiation",
+      "Associated nausea, vomiting, photophobia, phonophobia",
+      "Aura symptoms",
+      "Previous similar headaches",
+      "Medications including analgesic overuse",
+      "Visual symptoms (GCA, raised ICP)",
+      "Jaw claudication or scalp tenderness (GCA)",
+    ],
+  },
+  "Abdominal pain": {
+    red: [
+      "Haemodynamic symptoms (syncope, collapse, diaphoresis)",
+      "Peritonitic features (rigid, board-like abdomen)",
+      "Last menstrual period and pregnancy status in females of reproductive age",
+      "Pulsatile or tearing quality suggesting vascular cause",
+      "Sudden severe onset",
+    ],
+    orange: [
+      "Location, character and radiation",
+      "Duration and time course",
+      "Associated nausea, vomiting, anorexia",
+      "Bowel habit change",
+      "Urinary symptoms",
+      "Fever or rigors",
+      "Surgical history",
+      "Relevant medications (NSAIDs, steroids, anticoagulants)",
+    ],
+  },
+  "Syncope": {
+    red: [
+      "Exertional syncope",
+      "Syncope with palpitations or chest pain",
+      "No prodrome (sudden onset without warning)",
+      "Family history of sudden cardiac death",
+      "Syncope during supine position",
+    ],
+    orange: [
+      "Prodromal symptoms (nausea, sweating, tunnel vision)",
+      "Posture at time of event",
+      "Duration of loss of consciousness",
+      "Recovery time and post-ictal state",
+      "Witnessed account of episode",
+      "Tongue biting or incontinence",
+      "Previous similar episodes",
+      "Current medications",
+    ],
+  },
+  "Dyspnea": {
+    red: [
+      "Acute severe onset",
+      "Associated chest pain or haemoptysis",
+      "Recent immobility or long-haul travel (PE)",
+      "Stridor or inability to speak in full sentences",
+      "Haemodynamic compromise symptoms",
+    ],
+    orange: [
+      "Onset, duration and time course",
+      "Exertional vs rest dyspnea",
+      "Orthopnea and PND",
+      "Associated wheeze, cough or fever",
+      "Smoking history",
+      "Previous cardiac or respiratory history",
+      "Medications (ACE inhibitor, beta-blockers, NSAIDs)",
+      "Occupational or environmental exposures",
+    ],
+  },
+  "Back pain": {
+    red: [
+      "Bladder or bowel dysfunction (cauda equina)",
+      "Saddle area anaesthesia",
+      "Bilateral leg weakness or numbness",
+      "Fever, night sweats, unexplained weight loss (malignancy/infection)",
+      "History of malignancy",
+      "Trauma mechanism",
+      "Age >50 with new onset",
+    ],
+    orange: [
+      "Location and radiation (including leg symptoms — L4/L5/S1 dermatomal pattern)",
+      "Duration and time course",
+      "Aggravating and relieving factors",
+      "Morning stiffness (inflammatory)",
+      "Previous back pain history",
+      "Occupational and functional impact",
+      "Medications",
+    ],
+  },
+  "Stroke/TIA": {
+    red: [
+      "Exact time of symptom onset (for thrombolysis eligibility)",
+      "Focal neurological deficit (face, arm, leg, speech)",
+      "FAST symptoms",
+      "Anticoagulation status",
+      "Previous stroke or TIA",
+    ],
+    orange: [
+      "Duration and progression of symptoms",
+      "Associated headache, vomiting, decreased consciousness",
+      "Cardiovascular risk factors",
+      "Atrial fibrillation history",
+      "Medications",
+      "Recent procedures (dissection risk)",
+      "Functional baseline",
+    ],
+  },
+  "Seizure": {
+    red: [
+      "First ever seizure vs known epilepsy",
+      "Fever or signs of meningism (meningitis/encephalitis)",
+      "Post-ictal duration and current conscious state",
+      "Status epilepticus (seizure >5 min or not regained consciousness)",
+      "Head injury preceding or during seizure",
+    ],
+    orange: [
+      "Witness account — nature of movements, duration",
+      "Tongue biting or incontinence",
+      "Precipitating factors (sleep deprivation, alcohol, missed medications)",
+      "Medication compliance if known epileptic",
+      "Aura description",
+      "Drug and alcohol use",
+      "Driving history",
+    ],
+  },
+  "Elderly fall": {
+    red: [
+      "Head strike and loss of consciousness",
+      "Anticoagulation status",
+      "Neck pain or inability to move neck (c-spine)",
+      "Hip pain or inability to weight bear (NOF fracture)",
+      "GCS or confusion status",
+    ],
+    orange: [
+      "Witnessed vs unwitnessed",
+      "Mechanism — trip vs collapse",
+      "Prodromal symptoms (presyncope, dizziness)",
+      "Previous falls history",
+      "Medications contributing to fall (antihypertensives, sedatives)",
+      "Functional baseline and home environment",
+      "Osteoporosis history",
+    ],
+  },
+  "Fever": {
+    red: [
+      "Haemodynamic compromise (hypotension, tachycardia, altered consciousness)",
+      "Non-blanching rash (meningococcal)",
+      "Neck stiffness and photophobia",
+      "Immunocompromised state",
+      "Recent travel history",
+    ],
+    orange: [
+      "Duration and pattern of fever",
+      "Source symptoms (cough, dysuria, diarrhoea, localising pain)",
+      "Rigors",
+      "Recent procedures, devices or hospitalisation",
+      "Medications including recent antibiotics",
+      "Contact with sick persons",
+      "Vaccination history",
+    ],
+  },
+  "Palpitations": {
+    red: [
+      "Associated syncope or presyncope",
+      "Associated chest pain or dyspnea",
+      "Family history of sudden cardiac death or arrhythmia",
+      "Known structural heart disease",
+    ],
+    orange: [
+      "Onset, duration and offset (sudden vs gradual)",
+      "Regular vs irregular rhythm",
+      "Rate (fast vs slow)",
+      "Precipitating factors (exertion, caffeine, alcohol, stress)",
+      "Associated symptoms",
+      "Previous episodes and investigations",
+      "Medications (QT prolonging drugs)",
+      "Thyroid symptoms",
+    ],
+  },
+  "Weakness/numbness": {
+    red: [
+      "Acute onset suggesting stroke",
+      "Bilateral weakness or sensory level (spinal cord)",
+      "Bladder or bowel dysfunction",
+      "Progressive ascending weakness (GBS)",
+      "Respiratory compromise",
+    ],
+    orange: [
+      "Distribution — proximal vs distal, upper vs lower motor neuron pattern",
+      "Onset and time course",
+      "Associated pain",
+      "Preceding illness (GBS trigger)",
+      "Diabetes history (peripheral neuropathy)",
+      "Medications",
+      "Functional impact",
+    ],
+  },
+  "Depression": {
+    red: [
+      "Suicidal ideation — passive or active",
+      "Plan or intent for self-harm",
+      "Psychotic features",
+      "Risk to others",
+      "Safeguarding concerns",
+    ],
+    orange: [
+      "Duration and severity of low mood",
+      "Biological symptoms (sleep, appetite, energy, concentration)",
+      "Anhedonia",
+      "Previous episodes and treatment",
+      "Current medications",
+      "Substance use",
+      "Social supports and stressors",
+      "Functional impact",
+    ],
+  },
+};
+
+
 const MASTER_FEATURES = {
   "Chest pain": [
     { key:"cp_exertional", safe:"Not exertional", unsafe:"Exertional pain" },
@@ -1597,7 +1845,19 @@ Object.keys(MASTER_FEATURES).forEach(pres => {
 });
 
 function App() {
+  // ── API proxy URL — replace with your Cloudflare Worker URL ──────────────
+  const API_PROXY = "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev";
+  // ─────────────────────────────────────────────────────────────────────────
   const [mode, setMode] = useState("assess");
+
+  // ── Training mode state ───────────────────────────────────────────────────
+  const [trainingHistory, setTrainingHistory] = useState("");
+  const [trainingPresentation, setTrainingPresentation] = useState("");
+  const [trainingFeedback, setTrainingFeedback] = useState(null); // null | { red: [...], orange: [...] }
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [trainingError, setTrainingError] = useState("");
+  const [showTrainingKeyInput, setShowTrainingKeyInput] = useState(false);
+  const [trainingKeyInput, setTrainingKeyInput] = useState("");
   const [presentation, setPresentation] = useState("");
   const [configPresentation, setConfigPresentation] = useState(Object.keys(MASTER_FEATURES)[0]);
   const [configCategory, setConfigCategory] = useState(Object.keys(CATEGORIES)[0]);
@@ -1610,6 +1870,111 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem("clinicalConfigV5", JSON.stringify(userConfig)); } catch {}
   }, [userConfig]);
+
+  // ── Export / Import config ────────────────────────────────────────────────
+  const exportConfig = () => {
+    const payload = {
+      version: "CAT-v1",
+      exported: new Date().toISOString(),
+      userConfig,
+      customText,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `cat-config-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+  };
+
+  const importConfig = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const payload = JSON.parse(ev.target.result);
+        if (payload.version !== "CAT-v1") { alert("Unrecognised config file format."); return; }
+        if (payload.userConfig) setUserConfig(payload.userConfig);
+        if (payload.customText) setCustomText(payload.customText);
+        alert("✅ Config imported successfully!");
+      } catch { alert("Could not read config file — make sure it's a valid CAT export."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  // ── Training assessment ───────────────────────────────────────────────────
+  const runTrainingAssessment = async () => {
+    if (!trainingPresentation) { setTrainingError("Please select a presentation first."); return; }
+    if (!trainingHistory.trim()) { setTrainingError("Please enter your history notes first."); return; }
+    const apiKey = localStorage.getItem("cat_api_key") || "";
+    if (!apiKey) { setShowTrainingKeyInput(true); return; }
+
+    setTrainingLoading(true);
+    setTrainingError("");
+    setTrainingFeedback(null);
+
+    const flags = TRAINING_FLAGS[trainingPresentation];
+    const configRedFlags = (userConfig[trainingPresentation]?.redFlags || []);
+    const configRedLabels = configRedFlags.map(key => {
+      const feat = (MASTER_FEATURES[trainingPresentation]||[]).find(f=>f.key===key);
+      return feat ? feat.unsafe : key;
+    });
+
+    const redList = [
+      ...(flags?.red || []),
+      ...configRedLabels,
+    ];
+    const orangeList = flags?.orange || [];
+
+    const prompt = `You are an experienced clinical educator assessing a medical trainee's history-taking for a patient presenting with: ${trainingPresentation}.
+
+The trainee wrote this history:
+"""
+${trainingHistory}
+"""
+
+Assess whether the trainee addressed each of the following items. For each item, respond with either "covered" or "missed" based on whether it was meaningfully addressed in the history.
+
+RED FLAGS (must-not-miss):
+${redList.map((f,i) => `${i+1}. ${f}`).join("\n")}
+
+ORANGE FLAGS (required for complete clerking):
+${orangeList.map((f,i) => `${i+1}. ${f}`).join("\n")}
+
+Respond ONLY with valid JSON in exactly this format, no other text:
+{
+  "red": [
+    {"item": "exact flag text", "status": "covered" or "missed", "comment": "one short sentence why"}
+  ],
+  "orange": [
+    {"item": "exact flag text", "status": "covered" or "missed", "comment": "one short sentence why"}
+  ],
+  "overall": "one sentence overall assessment"
+}`;
+
+    try {
+      const res = await fetch(API_PROXY, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          messages: [{ role: "user", content: prompt }]
+        })
+      });
+      const json = await res.json();
+      if (res.status === 401) { localStorage.removeItem("cat_api_key"); setShowTrainingKeyInput(true); setTrainingError("Invalid API key."); return; }
+      const text = json?.content?.filter(b=>b.type==="text").map(b=>b.text).join("");
+      const clean = text.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(clean);
+      setTrainingFeedback(parsed);
+    } catch(e) {
+      setTrainingError("Assessment failed: " + (e.message||"Unknown error"));
+    } finally {
+      setTrainingLoading(false);
+    }
+  };
 
   const [bedNumber, setBedNumber] = useState("");
   const [patientInitials, setPatientInitials] = useState("");
@@ -2224,14 +2589,9 @@ function App() {
     setOutput("");
     const reportData = generateReport();
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(API_PROXY, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": storedKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 1000,
@@ -2341,6 +2701,10 @@ function App() {
               className={`px-4 py-2 rounded text-sm font-medium ${mode==="assess"?"bg-blue-600 text-white":"bg-gray-200 text-gray-700 hover:bg-gray-300"}`}>
               Assess
             </button>
+            <button onClick={() => setMode("training")}
+              className={`px-4 py-2 rounded text-sm font-medium ${mode==="training"?"bg-purple-600 text-white":"bg-gray-200 text-gray-700 hover:bg-gray-300"}`}>
+              🎓 Train
+            </button>
             <button onClick={() => setMode("configure")}
               className={`px-4 py-2 rounded text-sm font-medium ${mode==="configure"?"bg-blue-600 text-white":"bg-gray-200 text-gray-700 hover:bg-gray-300"}`}>
               ⚙️ Configure
@@ -2348,10 +2712,168 @@ function App() {
           </div>
         </div>
 
+        {/* TRAINING MODE */}
+        {mode === "training" && (
+          <div className="space-y-3">
+            {/* Header card */}
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <h2 className="text-lg font-bold text-purple-900 mb-1">🎓 History Taking Trainer</h2>
+              <p className="text-sm text-purple-700">Select a presentation, write your history as you would in a real consult, then tap <strong>Assess My History</strong>. The AI will score your note against must-not-miss red flags and completeness criteria.</p>
+            </div>
+
+            {/* Presentation selector */}
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Presentation</label>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <select value={trainingPresentation.split("|")[0] || ""} onChange={e => setTrainingPresentation(e.target.value === "" ? "" : e.target.value)}
+                  className="col-span-2 w-full px-3 py-2 border rounded text-sm">
+                  <option value="">— Select a presentation —</option>
+                  {Object.entries(CATEGORIES).map(([cat, pres]) => (
+                    <optgroup key={cat} label={cat}>
+                      {pres.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              {trainingPresentation && TRAINING_FLAGS[trainingPresentation] && (
+                <div className="flex gap-4 text-xs text-gray-500 mt-1">
+                  <span>🔴 {TRAINING_FLAGS[trainingPresentation].red.length + (userConfig[trainingPresentation]?.redFlags?.length||0)} red flags</span>
+                  <span>🟠 {TRAINING_FLAGS[trainingPresentation].orange.length} orange flags</span>
+                </div>
+              )}
+              {trainingPresentation && !TRAINING_FLAGS[trainingPresentation] && (
+                <p className="text-xs text-amber-600 mt-1">⚠️ Training criteria not yet defined for this presentation. More coming soon.</p>
+              )}
+            </div>
+
+            {/* History input */}
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Your History Notes</label>
+              <p className="text-xs text-gray-400 mb-2">Write as you would in a real consult — don't look anything up first. This is your unassisted attempt.</p>
+              <textarea
+                value={trainingHistory}
+                onChange={e => { setTrainingHistory(e.target.value); setTrainingFeedback(null); }}
+                placeholder="e.g. 65yo male presenting with 2 hours of central crushing chest pain, radiating to left arm, associated diaphoresis. No prior cardiac history..."
+                className="w-full h-48 px-3 py-2 border rounded text-sm font-mono"
+              />
+              <div className="flex gap-2 mt-2">
+                <button onClick={runTrainingAssessment} disabled={trainingLoading || !trainingPresentation || !trainingHistory.trim()}
+                  className={`flex-1 py-3 rounded font-semibold text-white transition-all ${trainingLoading || !trainingPresentation || !trainingHistory.trim() ? "bg-gray-300" : "bg-purple-600 hover:bg-purple-700"}`}>
+                  {trainingLoading ? "⏳ Assessing..." : "🎯 Assess My History"}
+                </button>
+                <button onClick={() => { setTrainingHistory(""); setTrainingFeedback(null); setTrainingError(""); }}
+                  className="px-4 py-3 bg-gray-200 text-gray-600 rounded text-sm">Clear</button>
+              </div>
+
+              {/* API key input for training */}
+              {showTrainingKeyInput && (
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
+                  <p className="text-sm font-semibold text-blue-800 mb-1">🔑 Anthropic API Key Required</p>
+                  <div className="flex gap-2">
+                    <input type="password" value={trainingKeyInput} onChange={e=>setTrainingKeyInput(e.target.value)}
+                      onKeyDown={e=>{ if(e.key==="Enter"){ localStorage.setItem("cat_api_key",trainingKeyInput.trim()); setTrainingKeyInput(""); setShowTrainingKeyInput(false); runTrainingAssessment(); }}}
+                      placeholder="sk-ant-..." className="flex-1 px-3 py-2 border rounded text-sm font-mono"
+                      autoComplete="off" autoCorrect="off" autoCapitalize="none"/>
+                    <button onClick={() => { localStorage.setItem("cat_api_key",trainingKeyInput.trim()); setTrainingKeyInput(""); setShowTrainingKeyInput(false); runTrainingAssessment(); }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded text-sm">Save & Run</button>
+                  </div>
+                </div>
+              )}
+              {trainingError && (
+                <p className="mt-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{trainingError}</p>
+              )}
+            </div>
+
+            {/* Feedback results */}
+            {trainingFeedback && (
+              <div className="bg-white rounded-lg shadow-sm p-4 space-y-4">
+                <h3 className="font-bold text-gray-800 text-lg">📋 Assessment Results</h3>
+
+                {/* Score summary */}
+                {(() => {
+                  const redTotal = trainingFeedback.red?.length || 0;
+                  const redCovered = trainingFeedback.red?.filter(f=>f.status==="covered").length || 0;
+                  const redMissed = redTotal - redCovered;
+                  const orgTotal = trainingFeedback.orange?.length || 0;
+                  const orgCovered = trainingFeedback.orange?.filter(f=>f.status==="covered").length || 0;
+                  const pass = redMissed === 0;
+                  return (
+                    <div className={`rounded-lg p-3 ${pass ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                      <p className={`font-bold text-lg ${pass ? "text-green-700" : "text-red-700"}`}>
+                        {pass ? "✅ PASS" : "❌ FAIL"} — {pass ? "All red flags addressed" : `${redMissed} red flag${redMissed>1?"s":""} missed`}
+                      </p>
+                      <p className="text-sm text-gray-600 mt-1">{trainingFeedback.overall}</p>
+                      <div className="flex gap-4 mt-2 text-sm">
+                        <span className="text-red-700">🔴 {redCovered}/{redTotal} red flags</span>
+                        <span className="text-orange-600">🟠 {orgCovered}/{orgTotal} orange flags</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Red flags checklist */}
+                <div>
+                  <h4 className="font-semibold text-red-700 mb-2">🔴 Red Flags — Must Not Miss</h4>
+                  <div className="space-y-2">
+                    {trainingFeedback.red?.map((f, i) => (
+                      <div key={i} className={`rounded p-2.5 border ${f.status==="covered" ? "bg-green-50 border-green-200" : "bg-red-50 border-red-300"}`}>
+                        <div className="flex items-start gap-2">
+                          <span className="text-base mt-0.5">{f.status==="covered" ? "✅" : "❌"}</span>
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{f.item}</p>
+                            {f.comment && <p className="text-xs text-gray-500 mt-0.5">{f.comment}</p>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Orange flags checklist */}
+                <div>
+                  <h4 className="font-semibold text-orange-600 mb-2">🟠 Orange Flags — Complete Clerking</h4>
+                  <div className="space-y-2">
+                    {trainingFeedback.orange?.map((f, i) => (
+                      <div key={i} className={`rounded p-2.5 border ${f.status==="covered" ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"}`}>
+                        <div className="flex items-start gap-2">
+                          <span className="text-base mt-0.5">{f.status==="covered" ? "✅" : "⚠️"}</span>
+                          <div>
+                            <p className="text-sm font-medium text-gray-800">{f.item}</p>
+                            {f.comment && <p className="text-xs text-gray-500 mt-0.5">{f.comment}</p>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <button onClick={() => { setTrainingHistory(""); setTrainingFeedback(null); setTrainingError(""); }}
+                  className="w-full py-2 bg-purple-600 text-white rounded font-medium text-sm hover:bg-purple-700">
+                  Try Again
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* CONFIGURE MODE */}
         {mode === "configure" && (
           <div className="bg-white rounded-lg shadow-sm p-4">
-            <h2 className="text-lg font-bold mb-1">Configure</h2>
+            <div className="flex items-start justify-between mb-1">
+              <h2 className="text-lg font-bold">Configure</h2>
+              <div className="flex gap-2">
+                <button onClick={exportConfig}
+                  className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700">
+                  ⬇️ Export Config
+                </button>
+                <label className="px-3 py-1.5 bg-teal-600 text-white rounded text-xs font-medium hover:bg-teal-700 cursor-pointer">
+                  ⬆️ Import Config
+                  <input type="file" accept=".json" className="hidden" onChange={importConfig}/>
+                </label>
+              </div>
+            </div>
             <p className="text-xs text-gray-500 mb-3">Edit labels, enable/disable features, set red flags. <strong>These reflect YOUR clinical preferences — not endorsed guidelines.</strong></p>
 
             {/* Tabs */}
