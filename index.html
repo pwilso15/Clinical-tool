@@ -3251,6 +3251,10 @@ Respond ONLY with valid JSON in exactly this format, no other text:
               ))}
               <button onClick={() => setMode("assess")} className="mt-2 w-full py-3 bg-blue-600 text-white rounded font-medium hover:bg-blue-700">✓ Done — Go to Assessment</button>
             </>)}
+          </div>
+        )}
+
+        {/* ASSESS MODE */}
         {mode === "assess" && (
           <>
             {/* Patient demographics */}
