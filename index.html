@@ -1907,9 +1907,6 @@ function App() {
   const runTrainingAssessment = async () => {
     if (!trainingPresentation) { setTrainingError("Please select a presentation first."); return; }
     if (!trainingHistory.trim()) { setTrainingError("Please enter your history notes first."); return; }
-    const apiKey = localStorage.getItem("cat_api_key") || "";
-    if (!apiKey) { setShowTrainingKeyInput(true); return; }
-
     setTrainingLoading(true);
     setTrainingError("");
     setTrainingFeedback(null);
@@ -1964,7 +1961,7 @@ Respond ONLY with valid JSON in exactly this format, no other text:
         })
       });
       const json = await res.json();
-      if (res.status === 401) { localStorage.removeItem("cat_api_key"); setShowTrainingKeyInput(true); setTrainingError("Invalid API key."); return; }
+      if (res.status === 401) { setTrainingError("API authentication error — check Cloudflare Worker API key."); return; }
       const text = json?.content?.filter(b=>b.type==="text").map(b=>b.text).join("");
       const clean = text.replace(/```json|```/g,"").trim();
       const parsed = JSON.parse(clean);
@@ -2583,8 +2580,6 @@ Respond ONLY with valid JSON in exactly this format, no other text:
 
   const generateAI = async () => {
     setAiError("");
-    const storedKey = localStorage.getItem("cat_api_key") || "";
-    if (!storedKey) { setShowKeyInput(true); return; }
     setIsGenerating(true);
     setOutput("");
     const reportData = generateReport();
@@ -2602,7 +2597,7 @@ Respond ONLY with valid JSON in exactly this format, no other text:
       const text = json?.content?.filter(b => b.type === "text").map(b => b.text).join("\n\n");
       if (text) { setOutput(text); }
       else {
-        if (res.status === 401) { localStorage.removeItem("cat_api_key"); setShowKeyInput(true); setAiError("Invalid API key — please re-enter."); }
+        if (res.status === 401) { setAiError("API authentication error — check Cloudflare Worker API key."); }
         else { throw new Error(json?.error?.message || JSON.stringify(json).slice(0,300)); }
       }
     } catch (e) { setAiError(e.message || "Network error"); setOutput(reportData); }
@@ -2768,19 +2763,7 @@ Respond ONLY with valid JSON in exactly this format, no other text:
               </div>
 
               {/* API key input for training */}
-              {showTrainingKeyInput && (
-                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
-                  <p className="text-sm font-semibold text-blue-800 mb-1">🔑 Anthropic API Key Required</p>
-                  <div className="flex gap-2">
-                    <input type="password" value={trainingKeyInput} onChange={e=>setTrainingKeyInput(e.target.value)}
-                      onKeyDown={e=>{ if(e.key==="Enter"){ localStorage.setItem("cat_api_key",trainingKeyInput.trim()); setTrainingKeyInput(""); setShowTrainingKeyInput(false); runTrainingAssessment(); }}}
-                      placeholder="sk-ant-..." className="flex-1 px-3 py-2 border rounded text-sm font-mono"
-                      autoComplete="off" autoCorrect="off" autoCapitalize="none"/>
-                    <button onClick={() => { localStorage.setItem("cat_api_key",trainingKeyInput.trim()); setTrainingKeyInput(""); setShowTrainingKeyInput(false); runTrainingAssessment(); }}
-                      className="px-4 py-2 bg-blue-600 text-white rounded text-sm">Save & Run</button>
-                  </div>
-                </div>
-              )}
+
               {trainingError && (
                 <p className="mt-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{trainingError}</p>
               )}
@@ -3643,31 +3626,11 @@ Respond ONLY with valid JSON in exactly this format, no other text:
                 <button onClick={downloadNote} className="px-4 py-3 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm font-medium">💾 Download</button>
                 <button onClick={emailNote} className="px-4 py-3 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm font-medium col-span-2 md:col-span-1">📧 Email</button>
               </div>
-              {showKeyInput && (
-                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded">
-                  <p className="text-sm font-semibold text-blue-800 mb-1">🔑 Anthropic API Key Required</p>
-                  <p className="text-xs text-blue-600 mb-2">Enter your key — saved to this device only.</p>
-                  <div className="flex gap-2">
-                    <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)}
-                      onKeyDown={e=>e.key==="Enter"&&submitApiKey()}
-                      placeholder="sk-ant-..." className="flex-1 px-3 py-2 border rounded text-sm font-mono"
-                      autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"/>
-                    <button onClick={submitApiKey} className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium">Save & Generate</button>
-                    <button onClick={()=>{setShowKeyInput(false);setAiError("");}} className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm">✕</button>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">Get your key at console.anthropic.com → API Keys</p>
+              {aiError && (
+                <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                  <strong>AI error:</strong> {aiError}
                 </div>
               )}
-              {aiError && !showKeyInput && (
-                <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 flex justify-between gap-2">
-                  <span><strong>AI error:</strong> {aiError}</span>
-                  <button onClick={()=>{localStorage.removeItem("cat_api_key");setShowKeyInput(true);setAiError("");}} className="underline shrink-0">Re-enter key</button>
-                </div>
-              )}
-              <div className="mt-2 flex justify-between items-center">
-                <p className="text-xs text-gray-400">AI note uses your Anthropic API key (stored on this device)</p>
-                <button onClick={()=>{localStorage.removeItem("cat_api_key");setShowKeyInput(true);}} className="text-xs text-gray-400 underline">Clear key</button>
-              </div>
             </section>
 
             {/* Output */}
