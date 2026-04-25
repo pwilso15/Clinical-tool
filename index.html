@@ -2704,23 +2704,45 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     }
 
     async function saveUserPreferences(prefs) {
-      if (!currentUser) return;
-
-      const { error } = await supabaseClient
-        .from('user_configs')
-        .upsert({
-          user_id: currentUser.id,
-          config_data: prefs
-        }, {
-          onConflict: 'user_id'
-        });
-
-      if (error) {
-        console.error('Error saving preferences:', error);
-        throw error;
+      if (!currentUser) {
+        console.warn('Cannot save: no user logged in');
+        throw new Error('Not authenticated. Please sign in again.');
       }
 
-      userPreferences = prefs;
+      try {
+        const { error } = await supabaseClient
+          .from('user_configs')
+          .upsert({
+            user_id: currentUser.id,
+            config_data: prefs
+          }, {
+            onConflict: 'user_id'
+          });
+
+        if (error) {
+          console.error('Error saving preferences:', error);
+          
+          // Check if it's an auth error
+          if (error.message && (
+            error.message.includes('JWT') || 
+            error.message.includes('token') || 
+            error.message.includes('auth') ||
+            error.code === 'PGRST301'
+          )) {
+            console.error('Authentication error detected - session may have expired');
+            throw new Error('Session expired. Please sign out and sign in again to save changes.');
+          }
+          
+          throw error;
+        }
+
+        userPreferences = prefs;
+        console.log('Preferences saved to Supabase successfully');
+        
+      } catch (error) {
+        console.error('Failed to save preferences:', error);
+        throw error;
+      }
     }
 
     // ============================================================================
@@ -2756,13 +2778,60 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     }
 
     function toggleFeature(key) {
-      // If there's a custom note, clear it first and reset to null
+      // Get the feature configuration to check button type
+      const feature = getCustomizedFeatures(patientData.presentation).find(f => f.key === key);
+      const buttonType = feature?.buttonType || 'tertiary';
+      
+      // If there's a custom note, clear it first and reset based on button type
       if (patientData.notes && patientData.notes[key]) {
         delete patientData.notes[key];
-        patientData.features[key] = "null";
+        patientData.features[key] = buttonType === 'binary' ? 'safe' : 'null';
       } else {
-        const current = patientData.features[key] || "null";
-        const next = current === "null" ? "safe" : current === "safe" ? "unsafe" : "null";
+        const current = patientData.features[key] || 'null';
+        let next;
+        
+        switch (buttonType) {
+          case 'binary':
+            // Binary: safe ↔ unsafe
+            next = current === 'safe' ? 'unsafe' : 'safe';
+            break;
+            
+          case 'severity':
+            // Severity: null → mild → moderate → severe → null
+            if (current === 'null') next = 'mild';
+            else if (current === 'mild') next = 'moderate';
+            else if (current === 'moderate') next = 'severe';
+            else if (current === 'severe') next = 'null';
+            else next = 'null';
+            break;
+            
+          case 'duration':
+            // Duration: null → short → medium → long → very-long → null
+            if (current === 'null') next = 'short';
+            else if (current === 'short') next = 'medium';
+            else if (current === 'medium') next = 'long';
+            else if (current === 'long') next = 'very-long';
+            else if (current === 'very-long') next = 'null';
+            else next = 'null';
+            break;
+            
+          case 'pain-scale':
+            // Pain scale: null → 0 → 1 → ... → 10 → null
+            if (current === 'null') next = '0';
+            else if (current === '10') next = 'null';
+            else {
+              const num = parseInt(current);
+              next = isNaN(num) ? '0' : String(num + 1);
+            }
+            break;
+            
+          case 'tertiary':
+          default:
+            // Tertiary (default): null → safe → unsafe → null
+            next = current === "null" ? "safe" : current === "safe" ? "unsafe" : "null";
+            break;
+        }
+        
         patientData.features[key] = next;
       }
       
@@ -2817,25 +2886,92 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       return `${base} bg-yellow-600 hover:bg-yellow-700`; // Intermediate values
     }
 
-    function getButtonClass(state, hasNote = false) {
+    function getButtonClass(state, hasNote = false, buttonType = 'tertiary') {
       const base = "text-white text-sm px-3 py-2 rounded transition-all w-full text-left font-medium";
-      // Purple for custom note
+      
+      // Purple for custom note (overrides everything)
       if (hasNote) return `${base} bg-purple-600 hover:bg-purple-700`;
-      // Green for safe
-      if (state === "safe") return `${base} bg-green-600 hover:bg-green-700`;
-      // Red for unsafe
-      if (state === "unsafe") return `${base} bg-red-600 hover:bg-red-700`;
-      // Grey for null/unset
-      return `${base} bg-gray-500 hover:bg-gray-600`;
+      
+      // Handle different button types
+      switch (buttonType) {
+        case 'binary':
+          // Binary: Green (safe) or Red (unsafe)
+          if (state === "safe") return `${base} bg-green-600 hover:bg-green-700`;
+          if (state === "unsafe") return `${base} bg-red-600 hover:bg-red-700`;
+          return `${base} bg-gray-500 hover:bg-gray-600`; // Shouldn't happen
+          
+        case 'severity':
+          // Severity scale: Grey (null) → Green (mild) → Yellow (moderate) → Red (severe)
+          if (state === "mild") return `${base} bg-green-500 hover:bg-green-600`;
+          if (state === "moderate") return `${base} bg-yellow-500 hover:bg-yellow-600 text-gray-900`;
+          if (state === "severe") return `${base} bg-red-600 hover:bg-red-700`;
+          return `${base} bg-gray-500 hover:bg-gray-600`; // null
+          
+        case 'duration':
+          // Duration: Grey (null) → Green (short) → Yellow (medium) → Orange (long) → Red (very long)
+          if (state === "short") return `${base} bg-green-500 hover:bg-green-600`;
+          if (state === "medium") return `${base} bg-yellow-500 hover:bg-yellow-600 text-gray-900`;
+          if (state === "long") return `${base} bg-orange-500 hover:bg-orange-600`;
+          if (state === "very-long") return `${base} bg-red-600 hover:bg-red-700`;
+          return `${base} bg-gray-500 hover:bg-gray-600`; // null
+          
+        case 'pain-scale':
+          // Pain scale 0-10: Grey (null), gradient from green (0-3) to yellow (4-6) to red (7-10)
+          if (state === 'null') return `${base} bg-gray-500 hover:bg-gray-600`;
+          const num = parseInt(state);
+          if (isNaN(num)) return `${base} bg-gray-500 hover:bg-gray-600`;
+          if (num === 0) return `${base} bg-green-600 hover:bg-green-700`;
+          if (num <= 3) return `${base} bg-green-500 hover:bg-green-600`;
+          if (num <= 6) return `${base} bg-yellow-500 hover:bg-yellow-600 text-gray-900`;
+          if (num <= 9) return `${base} bg-orange-500 hover:bg-orange-600`;
+          return `${base} bg-red-600 hover:bg-red-700`; // 10
+          
+        case 'tertiary':
+        default:
+          // Tertiary (default): Grey (null) → Green (safe) → Red (unsafe)
+          if (state === "safe") return `${base} bg-green-600 hover:bg-green-700`;
+          if (state === "unsafe") return `${base} bg-red-600 hover:bg-red-700`;
+          return `${base} bg-gray-500 hover:bg-gray-600`; // null
+      }
     }
 
-    function getButtonText(safe, unsafe, state, noteText = null) {
+    function getButtonText(safe, unsafe, state, noteText = null, buttonType = 'tertiary') {
       // If there's a custom note, show it
       if (noteText) return noteText;
-      // Otherwise show safe/unsafe based on state
-      if (state === "safe") return safe;
-      if (state === "unsafe") return unsafe;
-      return `${safe} / ${unsafe}`;
+      
+      // Handle different button types
+      switch (buttonType) {
+        case 'binary':
+          // Binary: Show safe or unsafe text
+          return state === 'safe' ? safe : unsafe;
+          
+        case 'severity':
+          // Severity: Show severity level
+          if (state === 'mild') return 'Mild';
+          if (state === 'moderate') return 'Moderate';
+          if (state === 'severe') return 'Severe';
+          return `${safe} / ${unsafe}`; // null
+          
+        case 'duration':
+          // Duration: Show duration
+          if (state === 'short') return '<5 min';
+          if (state === 'medium') return '5-30 min';
+          if (state === 'long') return '30min-6hr';
+          if (state === 'very-long') return '>6 hours';
+          return `${safe} / ${unsafe}`; // null
+          
+        case 'pain-scale':
+          // Pain scale: Show number
+          if (state === 'null') return `${safe} / ${unsafe}`;
+          return `Pain: ${state}/10`;
+          
+        case 'tertiary':
+        default:
+          // Tertiary (default): Show safe/unsafe based on state
+          if (state === "safe") return safe;
+          if (state === "unsafe") return unsafe;
+          return `${safe} / ${unsafe}`; // null
+      }
     }
 
     function getDifferentialButtonClass(state, hasNote = false) {
@@ -2896,19 +3032,70 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         
         const state = featuresData[feature.key];
         const note = patientData.notes && patientData.notes[feature.key];
+        const buttonType = feature.buttonType || 'tertiary';
         
         // If there's a custom note, always include it (regardless of state)
         if (note) {
           positives.push(note);
           mentionedItems.add(lowercaseFirst(note));
-        } else if (state === "unsafe") {
-          const text = lowercaseFirst(feature.unsafe);
-          positives.push(text);
-          mentionedItems.add(text);
-        } else if (state === "safe") {
-          const text = lowercaseFirst(feature.safe);
-          negatives.push(text);
-          mentionedItems.add(text);
+        } else {
+          // Handle based on button type
+          switch (buttonType) {
+            case 'binary':
+              if (state === 'unsafe') {
+                const text = lowercaseFirst(feature.unsafe);
+                positives.push(text);
+                mentionedItems.add(text);
+              } else if (state === 'safe') {
+                const text = lowercaseFirst(feature.safe);
+                negatives.push(text);
+                mentionedItems.add(text);
+              }
+              break;
+              
+            case 'severity':
+              if (state === 'mild' || state === 'moderate' || state === 'severe') {
+                const text = `${lowercaseFirst(feature.unsafe)} (${state})`;
+                positives.push(text);
+                mentionedItems.add(text);
+              }
+              break;
+              
+            case 'duration':
+              if (state && state !== 'null') {
+                const durationText = {
+                  'short': '<5 min',
+                  'medium': '5-30 min',
+                  'long': '30min-6hr',
+                  'very-long': '>6 hours'
+                }[state] || state;
+                const text = `${lowercaseFirst(feature.unsafe)} (duration: ${durationText})`;
+                positives.push(text);
+                mentionedItems.add(text);
+              }
+              break;
+              
+            case 'pain-scale':
+              if (state && state !== 'null') {
+                const text = `${lowercaseFirst(feature.unsafe)} (${state}/10)`;
+                positives.push(text);
+                mentionedItems.add(text);
+              }
+              break;
+              
+            case 'tertiary':
+            default:
+              if (state === "unsafe") {
+                const text = lowercaseFirst(feature.unsafe);
+                positives.push(text);
+                mentionedItems.add(text);
+              } else if (state === "safe") {
+                const text = lowercaseFirst(feature.safe);
+                negatives.push(text);
+                mentionedItems.add(text);
+              }
+              break;
+          }
         }
       });
 
@@ -3627,6 +3814,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   const hasNote = !!noteText;
                   const comment = feature.comment || '';
                   const hasComment = !!comment;
+                  const buttonType = feature.buttonType || 'tertiary';
                   
                   const buttonHtml = `
                     <button 
@@ -3636,9 +3824,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                       onmouseleave="cancelLongPress()"
                       ontouchstart="startLongPress('${feature.key}', '${feature.safe} / ${feature.unsafe}')"
                       ontouchend="cancelLongPress()"
-                      class="${getButtonClass(state, hasNote)} ${redFlagStyle}"
+                      class="${getButtonClass(state, hasNote, buttonType)} ${redFlagStyle}"
                       title="${noteText || ''}">
-                      ${feature.redFlag ? '🚩 ' : ''}${getButtonText(feature.safe, feature.unsafe, state, noteText)}${hasComment ? '<span class="tooltip-icon">i</span>' : ''}
+                      ${feature.redFlag ? '🚩 ' : ''}${getButtonText(feature.safe, feature.unsafe, state, noteText, buttonType)}${hasComment ? '<span class="tooltip-icon">i</span>' : ''}
                     </button>
                   `;
                   
@@ -4295,6 +4483,19 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                       <option value="Investigation" ${currentType === 'Investigation' ? 'selected' : ''}>🔬 Investigation</option>
                                       <option value="Differential Diagnosis" ${currentType === 'Differential Diagnosis' ? 'selected' : ''}>🔍 Differential Diagnosis</option>
                                     </select>
+                                    <div class="mt-2">
+                                      <label class="block text-xs text-gray-600 mb-1">🎯 Button Type:</label>
+                                      <select 
+                                        onchange="event.stopPropagation(); changeButtonType('${presentation}', ${idx}, this.value)"
+                                        onclick="event.stopPropagation()"
+                                        class="w-full text-xs px-2 py-1 border rounded">
+                                        <option value="tertiary" ${(feature.buttonType || 'tertiary') === 'tertiary' ? 'selected' : ''}>Tertiary (Grey/Green/Red)</option>
+                                        <option value="binary" ${feature.buttonType === 'binary' ? 'selected' : ''}>Binary (Off/On)</option>
+                                        <option value="severity" ${feature.buttonType === 'severity' ? 'selected' : ''}>Severity (None/Mild/Mod/Severe)</option>
+                                        <option value="duration" ${feature.buttonType === 'duration' ? 'selected' : ''}>Duration (&lt;5min/5-30min/30min-6hr/&gt;6hr)</option>
+                                        <option value="pain-scale" ${feature.buttonType === 'pain-scale' ? 'selected' : ''}>Pain Scale (0-10)</option>
+                                      </select>
+                                    </div>
                                     <div class="mt-2">
                                       <label class="block text-xs text-gray-600 mb-1">💡 Educational Comment (hover tooltip):</label>
                                       <textarea 
@@ -5383,6 +5584,35 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       render();
     };
 
+    window.changeButtonType = function(presentation, idx, newButtonType) {
+      if (!userPreferences.customizations.presentations[presentation]) {
+        userPreferences.customizations.presentations[presentation] = {
+          features: MASTER_FEATURES[presentation].map(f => ({ 
+            ...f, 
+            visible: true, 
+            redFlag: f.redFlag || false,
+            type: f.type || 'History',
+            buttonType: f.buttonType || 'tertiary'
+          })),
+          customFeatures: []
+        };
+      }
+      
+      const customization = userPreferences.customizations.presentations[presentation];
+      const numRegularFeatures = customization.features.length;
+      
+      // Update the button type
+      if (idx < numRegularFeatures) {
+        customization.features[idx].buttonType = newButtonType;
+      } else {
+        const customIdx = idx - numRegularFeatures;
+        customization.customFeatures[customIdx].buttonType = newButtonType;
+      }
+      
+      saveCustomizationsSilent();
+      render();
+    };
+
     window.addCustomFeature = function(presentation) {
       const safe = prompt('Enter the "normal/negative" label:');
       if (!safe) return;
@@ -5424,9 +5654,16 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       render();
     };
 
-    window.handleImportFile = function(event) {
+    window.handleImportFile = async function(event) {
       const file = event.target.files[0];
       if (!file) return;
+      
+      // Check if session is valid before importing
+      const sessionValid = await checkSessionValid();
+      if (!sessionValid) {
+        alert('⚠️ WARNING: Your session has expired or is invalid.\n\nYou can still import, but changes will NOT be saved to the cloud.\n\nTo fix:\n1. Sign out completely\n2. Sign in again\n3. Re-import this file\n\nContinue with import anyway?');
+        // Still allow import to localStorage, but warn them
+      }
       
       const reader = new FileReader();
       reader.onload = function(e) {
@@ -6104,6 +6341,13 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       const file = event.target.files[0];
       if (!file) return;
       
+      // Check if session is valid before importing
+      const sessionValid = await checkSessionValid();
+      if (!sessionValid) {
+        alert('⚠️ WARNING: Your session has expired or is invalid.\n\nYou can still import, but changes will NOT be saved to the cloud.\n\nTo fix:\n1. Sign out completely\n2. Sign in again\n3. Re-import this file\n\nContinue with import anyway?');
+        // Still allow import to localStorage, but warn them
+      }
+      
       try {
         const text = await file.text();
         const importData = JSON.parse(text);
@@ -6469,7 +6713,60 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         console.log('Customizations saved successfully');
       } catch (error) {
         console.error('Error auto-saving customizations:', error);
-        alert('Warning: Failed to save changes to database. Changes may not persist.');
+        
+        // Show specific error message
+        let errorMsg = 'Warning: Failed to save changes to cloud database.\n\n';
+        
+        if (error.message && error.message.includes('Session expired')) {
+          errorMsg += 'Your session has expired.\n\n';
+          errorMsg += '⚠️ IMPORTANT: Changes are saved locally but NOT synced to other devices.\n\n';
+          errorMsg += 'To fix: Sign out and sign in again, then re-import your changes.';
+        } else if (error.message && error.message.includes('Not authenticated')) {
+          errorMsg += 'You are not logged in.\n\n';
+          errorMsg += 'Please sign in to save changes across devices.';
+        } else {
+          errorMsg += 'Changes are saved locally but may not sync to other devices.\n\n';
+          errorMsg += 'Error: ' + (error.message || 'Unknown error');
+        }
+        
+        alert(errorMsg);
+      }
+    }
+
+    async function checkSessionValid() {
+      try {
+        const { data: { session }, error } = await supabaseClient.auth.getSession();
+        
+        if (error) {
+          console.error('Session check error:', error);
+          return false;
+        }
+        
+        if (!session) {
+          console.warn('No active session');
+          return false;
+        }
+        
+        // Check if token is about to expire (within 5 minutes)
+        const expiresAt = session.expires_at;
+        const now = Math.floor(Date.now() / 1000);
+        const timeUntilExpiry = expiresAt - now;
+        
+        if (timeUntilExpiry < 300) { // Less than 5 minutes
+          console.warn('Session expiring soon');
+          // Try to refresh
+          const { error: refreshError } = await supabaseClient.auth.refreshSession();
+          if (refreshError) {
+            console.error('Failed to refresh session:', refreshError);
+            return false;
+          }
+          console.log('Session refreshed successfully');
+        }
+        
+        return true;
+      } catch (error) {
+        console.error('Error checking session:', error);
+        return false;
       }
     }
 
