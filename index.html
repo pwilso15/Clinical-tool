@@ -2190,26 +2190,41 @@
     };
     
     // Patient data - LOCAL STORAGE ONLY (cleared daily)
-    let patientData = {
-      presentation: "",
-      hopc: "",
-      pmh: "",
-      psh: "",
-      meds: "",
-      allergies: "",
-      social: "",
-      demographics: { name: "", age: "", sex: "" },
-      vitals: { temp: "", bp: "", dbp: "", hr: "", rr: "", spo2: "" },
-      ros: {},
-      exam: {},
-      features: {}, // Presentation-specific features
-      investigations: { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" },
-      investigation_toggles: {}, // Multi-state toggles for ECG, Urinalysis (e.g., ecg_rate: 0)
-      differentials: {}, // Differential diagnosis tracking: null → "differential" → "diagnosis"
-      managementPlans: {}, // Management plans for confirmed diagnoses: { "diagnosis_name": "plan text" }
-      notes: {}, // Custom notes for any button (ros_*, exam_*, feature_*)
-      lastSaved: null
-    };
+    // Multi-patient support
+    let currentPatientId = 1;
+    let patients = {}; // { 1: patientData, 2: patientData, ... }
+    const MAX_PATIENTS = 10;
+    
+    // Get empty patient template
+    function getEmptyPatientData() {
+      return {
+        presentation: "",
+        hopc: "",
+        pmh: "",
+        psh: "",
+        meds: "",
+        allergies: "",
+        social: "",
+        demographics: { name: "", age: "", sex: "" },
+        vitals: { temp: "", bp: "", dbp: "", hr: "", rr: "", spo2: "" },
+        ros: {},
+        exam: {},
+        features: {}, // Presentation-specific features
+        investigations: { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" },
+        investigation_toggles: {}, // Multi-state toggles for ECG, Urinalysis (e.g., ecg_rate: 0)
+        differentials: {}, // Differential diagnosis tracking: null → "differential" → "diagnosis"
+        managementPlans: {}, // Management plans for confirmed diagnoses: { "diagnosis_name": "plan text" }
+        notes: {}, // Custom notes for any button (ros_*, exam_*, feature_*)
+        lastSaved: null,
+        createdAt: new Date().toISOString()
+      };
+    }
+    
+    // Current patient data (points to patients[currentPatientId])
+    let patientData = getEmptyPatientData();
+    
+    // Initialize with one patient
+    patients[1] = patientData;
 
     // Configure modal state
     let configureModalOpen = false;
@@ -2530,93 +2545,168 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     // ============================================================================
 
     function checkAndClearOldData() {
-      const saved = localStorage.getItem('patientData');
-      if (!saved) return;
+      const saved = localStorage.getItem('patients');
+      if (!saved) {
+        // Initialize with one empty patient
+        patients = { 1: getEmptyPatientData() };
+        currentPatientId = 1;
+        patientData = patients[1];
+        saveAllPatients();
+        return;
+      }
       
       try {
         const data = JSON.parse(saved);
-        const savedDate = new Date(data.lastSaved);
         const today = new Date();
         
-        // Clear if different day
-        if (savedDate.toDateString() !== today.toDateString()) {
-          console.log('New day detected - clearing patient data');
-          localStorage.removeItem('patientData');
-          patientData = {
-            presentation: "",
-            hopc: "",
-            pmh: "",
-            psh: "",
-            meds: "",
-            allergies: "",
-            social: "",
-            demographics: { name: "", age: "", sex: "" },
-            vitals: { temp: "", bp: "", dbp: "", hr: "", rr: "", spo2: "" },
-            ros: {},
-            exam: {},
-            features: {},
-            investigations: { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" },
-            investigation_toggles: {},
-            differentials: {},
-            managementPlans: {},
-            notes: {},
-            lastSaved: null
-          };
+        // Check if any patient data is from a different day
+        let hasOldData = false;
+        Object.keys(data.patients || {}).forEach(patientId => {
+          const patient = data.patients[patientId];
+          if (patient.lastSaved) {
+            const savedDate = new Date(patient.lastSaved);
+            if (savedDate.toDateString() !== today.toDateString()) {
+              hasOldData = true;
+            }
+          }
+        });
+        
+        if (hasOldData) {
+          console.log('New day detected - clearing all patient data');
+          localStorage.removeItem('patients');
+          patients = { 1: getEmptyPatientData() };
+          currentPatientId = 1;
+          patientData = patients[1];
+          saveAllPatients();
         } else {
           // Load patient data from localStorage
-          patientData = data;
+          patients = data.patients || { 1: getEmptyPatientData() };
+          currentPatientId = data.currentPatientId || 1;
           
-          // SAFETY CHECK: Ensure new fields exist (for backward compatibility)
-          if (!patientData.investigations) {
-            patientData.investigations = { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" };
+          // Ensure current patient exists
+          if (!patients[currentPatientId]) {
+            currentPatientId = parseInt(Object.keys(patients)[0]) || 1;
           }
-          if (!patientData.investigation_toggles) {
-            patientData.investigation_toggles = {};
-          }
-          if (!patientData.notes) {
-            patientData.notes = {};
-          }
-          if (!patientData.differentials) {
-            patientData.differentials = {};
-          }
-          if (!patientData.managementPlans) {
-            patientData.managementPlans = {};
-          }
+          
+          patientData = patients[currentPatientId];
+          
+          // SAFETY CHECK: Ensure new fields exist for all patients (backward compatibility)
+          Object.keys(patients).forEach(id => {
+            const p = patients[id];
+            if (!p.investigations) p.investigations = { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" };
+            if (!p.investigation_toggles) p.investigation_toggles = {};
+            if (!p.notes) p.notes = {};
+            if (!p.differentials) p.differentials = {};
+            if (!p.managementPlans) p.managementPlans = {};
+            if (!p.createdAt) p.createdAt = new Date().toISOString();
+          });
         }
       } catch (e) {
         console.error('Error loading patient data:', e);
+        patients = { 1: getEmptyPatientData() };
+        currentPatientId = 1;
+        patientData = patients[1];
       }
     }
 
     function savePatientData() {
       patientData.lastSaved = new Date().toISOString();
-      localStorage.setItem('patientData', JSON.stringify(patientData));
+      patients[currentPatientId] = patientData;
+      saveAllPatients();
+    }
+    
+    function saveAllPatients() {
+      const data = {
+        patients: patients,
+        currentPatientId: currentPatientId
+      };
+      localStorage.setItem('patients', JSON.stringify(data));
     }
 
     function clearAllPatientData() {
-      if (confirm('Clear all patient data? This cannot be undone.')) {
-        localStorage.removeItem('patientData');
-        patientData = {
-          presentation: "",
-          hopc: "",
-          pmh: "",
-          psh: "",
-          meds: "",
-          allergies: "",
-          social: "",
-          demographics: { name: "", age: "", sex: "" },
-          vitals: { temp: "", bp: "", dbp: "", hr: "", rr: "", spo2: "" },
-          ros: {},
-          exam: {},
-          features: {},
-          investigations: { urinalysis: "", bloods: "", ecg: "", imaging: "", other: "" },
-          investigation_toggles: {},
-          notes: {},
-          lastSaved: null
-        };
+      if (confirm('Clear ALL patient data (all ' + Object.keys(patients).length + ' patients)? This cannot be undone.')) {
+        localStorage.removeItem('patients');
+        patients = { 1: getEmptyPatientData() };
+        currentPatientId = 1;
+        patientData = patients[1];
+        saveAllPatients();
         render();
         alert('All patient data cleared.');
       }
+    }
+    
+    // Patient management functions
+    window.switchPatient = function(patientId) {
+      const id = parseInt(patientId);
+      if (!patients[id]) {
+        console.error('Patient', id, 'does not exist');
+        return;
+      }
+      currentPatientId = id;
+      patientData = patients[id];
+      saveAllPatients(); // Save current patient selection
+      render();
+    };
+    
+    window.createNewPatient = function() {
+      const patientCount = Object.keys(patients).length;
+      if (patientCount >= MAX_PATIENTS) {
+        alert(`Maximum of ${MAX_PATIENTS} patients reached. Please delete a patient before creating a new one.`);
+        return;
+      }
+      
+      // Find next available ID
+      let newId = 1;
+      while (patients[newId]) {
+        newId++;
+      }
+      
+      patients[newId] = getEmptyPatientData();
+      currentPatientId = newId;
+      patientData = patients[newId];
+      saveAllPatients();
+      render();
+    };
+    
+    window.deletePatient = function(patientId) {
+      const id = parseInt(patientId);
+      const patientCount = Object.keys(patients).length;
+      
+      if (patientCount === 1) {
+        alert('Cannot delete the last patient. Clear data instead.');
+        return;
+      }
+      
+      const patientLabel = getPatientLabel(id);
+      if (!confirm(`Delete ${patientLabel}? This cannot be undone.`)) {
+        return;
+      }
+      
+      delete patients[id];
+      
+      // If we deleted the current patient, switch to another one
+      if (id === currentPatientId) {
+        currentPatientId = parseInt(Object.keys(patients)[0]);
+        patientData = patients[currentPatientId];
+      }
+      
+      saveAllPatients();
+      render();
+    };
+    
+    function getPatientLabel(id) {
+      const patient = patients[id];
+      if (!patient) return `Patient ${id}`;
+      
+      if (patient.demographics && patient.demographics.name) {
+        return patient.demographics.name;
+      }
+      
+      if (patient.presentation) {
+        return `Patient ${id} (${patient.presentation})`;
+      }
+      
+      return `Patient ${id}`;
     }
 
     // ============================================================================
@@ -3557,6 +3647,285 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
       return parts.join("");
     }
+    
+    function generateStructuredReport() {
+      // This version ALWAYS includes headings even if sections are empty
+      const parts = [];
+      
+      // Demographics
+      if (patientData.demographics.name || patientData.demographics.age || patientData.demographics.sex) {
+        const demo = [];
+        if (patientData.demographics.name) demo.push(patientData.demographics.name);
+        if (patientData.demographics.age) demo.push(`${patientData.demographics.age}yo`);
+        if (patientData.demographics.sex) demo.push(patientData.demographics.sex);
+        parts.push(demo.join(", "));
+      }
+
+      // Presenting Complaint - ALWAYS include heading
+      parts.push(`\n\nPresenting Complaint: ${patientData.presentation || ''}`);
+
+      // HOPC - ALWAYS include heading
+      parts.push(`\n\nHistory of Presenting Complaint:\n${patientData.hopc || ''}`);
+
+      // Presentation-specific features (with deduplication tracking) - RIGHT AFTER HOPC
+      let mentionedItems = new Set();
+      const featuresResult = formatFeaturesProse(patientData.features, patientData.presentation);
+      if (featuresResult && featuresResult.text) {
+        parts.push(`\n\n${featuresResult.text}`);
+        mentionedItems = featuresResult.mentioned;
+      }
+
+      // ROS - if present
+      const rosProse = formatROSProse(patientData.ros, mentionedItems);
+      if (rosProse) {
+        parts.push(`\n\nReview of Systems:\n${rosProse}`);
+      }
+
+      // PMH - ALWAYS include heading
+      parts.push(`\n\nPast Medical History:\n${patientData.pmh || ''}`);
+
+      // PSH - if present
+      if (patientData.psh) {
+        parts.push(`\n\nPast Surgical History:\n${patientData.psh}`);
+      }
+
+      // Medications - ALWAYS include heading
+      parts.push(`\n\nMedications:\n${patientData.meds || ''}`);
+
+      // Allergies - if present
+      if (patientData.allergies) {
+        parts.push(`\n\nAllergies:\n${patientData.allergies}`);
+      }
+
+      // Social - ALWAYS include heading
+      parts.push(`\n\nSocial History:\n${patientData.social || ''}`);
+
+      // Vitals
+      const vitals = patientData.vitals;
+      const vitalsParts = [];
+      if (vitals.temp) vitalsParts.push(`Temp ${vitals.temp}°C`);
+      if (vitals.bp && vitals.dbp) vitalsParts.push(`BP ${vitals.bp}/${vitals.dbp}`);
+      else if (vitals.bp) vitalsParts.push(`BP ${vitals.bp}`);
+      if (vitals.hr) vitalsParts.push(`HR ${vitals.hr}`);
+      if (vitals.rr) vitalsParts.push(`RR ${vitals.rr}`);
+      if (vitals.spo2) vitalsParts.push(`SpO2 ${vitals.spo2}%`);
+      if (vitalsParts.length > 0) {
+        parts.push(`\n\nVitals: ${vitalsParts.join(", ")}`);
+      }
+
+      // Examination - ALWAYS include heading
+      const examProse = formatExamProse(patientData.exam, patientData.presentation);
+      parts.push(`\n\nExamination:\n${examProse || ''}`);
+
+      // Investigations - ALWAYS include heading
+      const invParts = [];
+      
+      // Add Investigation-type features from presentation-specific features
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const invFeatures = allFeatures.filter(f => f.type === "Investigation");
+        
+        if (invFeatures.length > 0) {
+          const findings = [];
+          
+          invFeatures.forEach(feature => {
+            const state = patientData.features[feature.key];
+            const note = patientData.notes && patientData.notes[feature.key];
+            const buttonType = feature.buttonType || 'tertiary';
+            
+            // If there's a custom note, always include it
+            if (note) {
+              findings.push(note);
+            } else {
+              // Handle based on button type
+              switch (buttonType) {
+                case 'binary':
+                  if (state === 'unsafe') {
+                    const text = lowercaseFirst(feature.unsafe);
+                    findings.push(text);
+                  } else if (state === 'safe') {
+                    const text = lowercaseFirst(feature.safe);
+                    findings.push(text);
+                  }
+                  break;
+                  
+                case 'severity':
+                  if (state === 'mild' || state === 'moderate' || state === 'severe') {
+                    const text = `${lowercaseFirst(feature.unsafe)} (${state})`;
+                    findings.push(text);
+                  }
+                  break;
+                  
+                case 'duration':
+                  if (state && state !== 'null') {
+                    const durationText = {
+                      'short': '<5 min',
+                      'medium': '5-30 min',
+                      'long': '30min-6hr',
+                      'very-long': '>6 hours'
+                    }[state] || state;
+                    const text = `${lowercaseFirst(feature.unsafe)} (duration: ${durationText})`;
+                    findings.push(text);
+                  }
+                  break;
+                  
+                case 'pain-scale':
+                  if (state && state !== 'null') {
+                    const text = `${lowercaseFirst(feature.unsafe)} (${state}/10)`;
+                    findings.push(text);
+                  }
+                  break;
+                  
+                case 'tertiary':
+                default:
+                  if (state === "unsafe") {
+                    const text = lowercaseFirst(feature.unsafe);
+                    findings.push(text);
+                  } else if (state === "safe") {
+                    const text = lowercaseFirst(feature.safe);
+                    findings.push(text);
+                  }
+                  break;
+              }
+            }
+          });
+          
+          if (findings.length > 0) {
+            invParts.push(`${formatList(findings)}.`);
+          }
+        }
+      }
+      
+      // Add ECG toggle findings if any set
+      const ecgToggles = INVESTIGATION_TOGGLES.ECG
+        .filter(toggle => (patientData.investigation_toggles[toggle.key] || 0) > 0)
+        .map(toggle => {
+          const index = patientData.investigation_toggles[toggle.key];
+          return toggle.options[index];
+        });
+      
+      if (ecgToggles.length > 0 || patientData.investigations.ecg) {
+        let ecgText = "ECG: ";
+        const parts = [];
+        if (ecgToggles.length > 0) parts.push(ecgToggles.join(", "));
+        if (patientData.investigations.ecg) parts.push(patientData.investigations.ecg);
+        ecgText += parts.join(". ");
+        invParts.push(ecgText);
+      }
+      
+      // Add Urinalysis toggle findings if any set
+      const urineToggles = INVESTIGATION_TOGGLES.Urinalysis
+        .filter(toggle => (patientData.investigation_toggles[toggle.key] || 0) > 0)
+        .map(toggle => {
+          const index = patientData.investigation_toggles[toggle.key];
+          return `${toggle.label}: ${toggle.options[index]}`;
+        });
+      
+      if (urineToggles.length > 0 || patientData.investigations.urinalysis) {
+        let urineText = "Urinalysis: ";
+        const parts = [];
+        if (urineToggles.length > 0) parts.push(urineToggles.join(", "));
+        if (patientData.investigations.urinalysis) parts.push(patientData.investigations.urinalysis);
+        urineText += parts.join(". ");
+        invParts.push(urineText);
+      }
+      
+      if (patientData.investigations.bloods) {
+        invParts.push(`Bloods: ${patientData.investigations.bloods}`);
+      }
+      if (patientData.investigations.imaging) {
+        invParts.push(`Imaging: ${patientData.investigations.imaging}`);
+      }
+      if (patientData.investigations.other) {
+        invParts.push(`Other: ${patientData.investigations.other}`);
+      }
+      
+      // ALWAYS include heading, with content if available
+      parts.push(`\n\nInvestigations:\n${invParts.length > 0 ? invParts.join("\n") : ''}`);
+
+      // Differential Diagnosis - ALWAYS include heading
+      const ddxParts = [];
+      
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const ddxFeatures = allFeatures.filter(f => f.type === "Differential Diagnosis");
+        
+        if (ddxFeatures.length > 0) {
+          const differentials = [];
+          
+          ddxFeatures.forEach(feature => {
+            const state = patientData.differentials[feature.key];
+            const note = patientData.notes && patientData.notes[feature.key];
+            
+            // Only include items marked as "differential" (yellow button)
+            if (state === "differential") {
+              const text = feature.unsafe; // Use unsafe label for DDx items
+              differentials.push(note ? note : text);
+            }
+          });
+          
+          if (differentials.length > 0) {
+            ddxParts.push(differentials.join(", "));
+          }
+        }
+      }
+      
+      parts.push(`\n\nDifferential Diagnosis:\n${ddxParts.length > 0 ? ddxParts.join(", ") : ''}`);
+
+      // Diagnosis - ALWAYS include heading
+      const diagnosisParts = [];
+      
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const ddxFeatures = allFeatures.filter(f => f.type === "Differential Diagnosis");
+        
+        if (ddxFeatures.length > 0) {
+          const confirmedDiagnoses = [];
+          
+          ddxFeatures.forEach(feature => {
+            const state = patientData.differentials[feature.key];
+            const note = patientData.notes && patientData.notes[feature.key];
+            
+            // Only include items marked as "diagnosis" (blue button)
+            if (state === "diagnosis") {
+              const text = feature.unsafe; // Use unsafe label for diagnoses
+              confirmedDiagnoses.push(note ? note : text);
+            }
+          });
+          
+          if (confirmedDiagnoses.length > 0) {
+            diagnosisParts.push(confirmedDiagnoses.join(", "));
+          }
+        }
+      }
+      
+      parts.push(`\n\nDiagnosis:\n${diagnosisParts.length > 0 ? diagnosisParts.join(", ") : ''}`);
+
+      // Management Plan (for confirmed diagnoses with plans) - ALWAYS include heading
+      const managementParts = [];
+      
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const ddxFeatures = allFeatures.filter(f => f.type === "Differential Diagnosis");
+        const confirmedDiagnoses = ddxFeatures.filter(f => patientData.differentials[f.key] === "diagnosis");
+        
+        confirmedDiagnoses.forEach(feature => {
+          const diagnosisName = feature.unsafe;
+          // Check saved plan OR template (same logic as UI display)
+          const savedPlan = patientData.managementPlans[diagnosisName];
+          const template = getManagementPlanTemplate(diagnosisName);
+          const plan = savedPlan || template;
+          
+          if (plan && plan.trim()) {
+            managementParts.push(`${diagnosisName}:\n${plan}`);
+          }
+        });
+      }
+      
+      parts.push(`\n\nPlan:\n${managementParts.length > 0 ? managementParts.join("\n\n") : ''}`);
+
+      return parts.join("");
+    }
 
     // ============================================================================
     // INITIALIZATION
@@ -3712,6 +4081,34 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   <p class="text-xs text-gray-500">Customizable clinical documentation with evidence integration</p>
                 </div>
                 <div class="flex items-center gap-2">
+                  <!-- Patient Selector -->
+                  <div class="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                    <span class="text-xs text-gray-600">Patient:</span>
+                    <select 
+                      onchange="switchPatient(this.value)" 
+                      class="text-xs bg-white border rounded px-1 py-0.5 font-medium">
+                      ${Object.keys(patients).sort((a, b) => parseInt(a) - parseInt(b)).map(id => `
+                        <option value="${id}" ${parseInt(id) === currentPatientId ? 'selected' : ''}>
+                          ${getPatientLabel(parseInt(id))}
+                        </option>
+                      `).join('')}
+                    </select>
+                    <button 
+                      onclick="createNewPatient()" 
+                      class="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded hover:bg-green-200"
+                      title="New Patient (max ${MAX_PATIENTS})">
+                      +
+                    </button>
+                    ${Object.keys(patients).length > 1 ? `
+                    <button 
+                      onclick="deletePatient(currentPatientId)" 
+                      class="text-xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                      title="Delete Current Patient">
+                      −
+                    </button>
+                    ` : ''}
+                  </div>
+                  
                   <span class="text-sm text-gray-600 hidden sm:inline">${currentUser.email}</span>
                   <button onclick="openConfigureModal()" class="px-2 py-1.5 text-xs bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 transition-colors font-semibold">
                     ⚙️ Configure
@@ -4289,10 +4686,20 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
             <!-- Generate Report -->
             <div class="bg-white rounded-lg shadow-sm p-4">
-              <button onclick="handleGenerateReport()" 
-                class="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors">
-                📋 Generate Structured Report
-              </button>
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <button onclick="handleGenerateReport(false)" 
+                  class="py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-sm">
+                  📋 Condensed Report
+                </button>
+                <button onclick="handleGenerateReport(true)" 
+                  class="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors text-sm">
+                  📄 Structured Report
+                </button>
+              </div>
+              <p class="text-xs text-gray-500 mb-2">
+                <span class="font-semibold">Condensed:</span> Only filled sections • 
+                <span class="font-semibold">Structured:</span> All headings included
+              </p>
               
               <div id="report-output" class="hidden mt-4">
                 <h3 class="text-sm font-bold text-gray-700 mb-2">Generated Report (Editable)</h3>
@@ -5221,8 +5628,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       clearAllPatientData();
     };
 
-    window.handleGenerateReport = function() {
-      const report = generateReport();
+    window.handleGenerateReport = function(structured = false) {
+      const report = structured ? generateStructuredReport() : generateReport();
       document.getElementById('report-text').value = report;
       document.getElementById('report-output').classList.remove('hidden');
     };
