@@ -2248,8 +2248,9 @@
     };
 
     // AI Builder modal state - process OpenEvidence reviews into clean JSON
-    let aiBuilderModalOpen = false;
-    let aiBuilderState = {
+    // Exposed on window so inline event handlers in HTML can access them
+    window.aiBuilderModalOpen = false;
+    window.aiBuilderState = {
       presentation: '',          // Target presentation name
       step: 'paste',             // paste | processing | review | manual_paste
       oeReviewText: '',          // The pasted OpenEvidence response
@@ -2260,6 +2261,9 @@
       errorMessage: '',          // Any error to show
       processing: false
     };
+    // Local aliases for convenience inside the module
+    let aiBuilderModalOpen = window.aiBuilderModalOpen;
+    let aiBuilderState = window.aiBuilderState;
 
     // Collapsible sections state (persisted to localStorage)
     let collapsedSections = {
@@ -6200,7 +6204,10 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
 
     window.openAIBuilderModal = function(presentation) {
       aiBuilderModalOpen = true;
-      aiBuilderState = {
+      window.aiBuilderModalOpen = true;
+      // Mutate in place so window.aiBuilderState stays the same object reference
+      // (otherwise inline event handlers would write to a stale object)
+      Object.assign(aiBuilderState, {
         presentation: presentation,
         step: 'paste',
         oeReviewText: '',
@@ -6210,12 +6217,13 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         manualResponseText: '',
         errorMessage: '',
         processing: false
-      };
+      });
       render();
     };
 
     window.closeAIBuilderModal = function() {
       aiBuilderModalOpen = false;
+      window.aiBuilderModalOpen = false;
       render();
     };
 
