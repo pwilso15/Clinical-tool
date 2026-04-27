@@ -89,6 +89,10 @@
       'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsbmJvY2F6bmNmdG5vcGd6bWt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNTMzOTAsImV4cCI6MjA4OTcyOTM5MH0.-75l-RKyif8uAjzriGJuAsrAydXmLbqzsHggwu-W0sc'
     );
 
+    // Cloudflare Worker URL for Claude API proxying
+    // Update this to your worker URL - leave as null to enable manual paste-mode fallback
+    const WORKER_URL = 'https://lifestory.phil-a-wilson.workers.dev';
+
     // ============================================================================
     // DATA STRUCTURES
     // ============================================================================
@@ -2241,6 +2245,20 @@
       unsafe: '',
       type: 'History',
       redFlag: false
+    };
+
+    // AI Builder modal state - process OpenEvidence reviews into clean JSON
+    let aiBuilderModalOpen = false;
+    let aiBuilderState = {
+      presentation: '',          // Target presentation name
+      step: 'paste',             // paste | processing | review | manual_paste
+      oeReviewText: '',          // The pasted OpenEvidence response
+      generatedJson: null,       // The Claude-generated JSON
+      generatedJsonText: '',     // String version (editable)
+      manualPromptText: '',      // The prompt to copy to Claude.ai (fallback mode)
+      manualResponseText: '',    // What user pastes back from Claude.ai
+      errorMessage: '',          // Any error to show
+      processing: false
     };
 
     // Collapsible sections state (persisted to localStorage)
@@ -4830,11 +4848,18 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                           ${openPresentationDetails.has(presentation) ? 'open' : ''}>
                           <summary class="px-4 py-3 cursor-pointer hover:bg-gray-50 font-medium flex items-center justify-between">
                             <span>${presentation}</span>
-                            <button onclick="event.stopPropagation(); checkPresentationCompleteness('${presentation}')" 
-                              class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
-                              title="Check checklist completeness with OpenEvidence">
-                              🔬 Check Completeness
-                            </button>
+                            <div class="flex items-center gap-1">
+                              <button onclick="event.stopPropagation(); checkPresentationCompleteness('${presentation}')" 
+                                class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+                                title="Generate prompt to check completeness with OpenEvidence">
+                                🔬 Check
+                              </button>
+                              <button onclick="event.stopPropagation(); openAIBuilderModal('${presentation}')" 
+                                class="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 font-medium"
+                                title="Build clean JSON from OpenEvidence review using AI">
+                                🤖 Build from OE
+                              </button>
+                            </div>
                           </summary>
                           <div class="px-4 py-3 border-t space-y-2 bg-gray-50">
                             ${(() => {
@@ -4941,9 +4966,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                             <span>⭐ ${customPres.name}</span>
                             <div class="flex items-center gap-2">
                               <button onclick="event.stopPropagation(); checkPresentationCompleteness('${customPres.name}')" 
-                                class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
-                                title="Check checklist completeness with OpenEvidence">
-                                🔬 Check Completeness
+                                class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+                                title="Generate prompt to check completeness with OpenEvidence">
+                                🔬 Check
+                              </button>
+                              <button onclick="event.stopPropagation(); openAIBuilderModal('${customPres.name}')" 
+                                class="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 font-medium"
+                                title="Build clean JSON from OpenEvidence review using AI">
+                                🤖 Build from OE
                               </button>
                               <button onclick="event.stopPropagation(); deleteCustomPresentation(${cpIdx})" 
                                 class="text-red-600 hover:text-red-800 text-sm"
@@ -5441,6 +5471,190 @@ What rare or uncommon diagnoses should be considered in the differential for thi
             </div>
             ` : ''}
 
+            <!-- AI Builder Modal: Process OpenEvidence reviews into clean JSON -->
+            ${aiBuilderModalOpen ? `
+            <div class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white p-4 rounded-t-lg flex items-center justify-between">
+                  <div>
+                    <h2 class="text-lg font-bold">🤖 Build Clean Checklist from OE Review</h2>
+                    <p class="text-xs opacity-90">${aiBuilderState.presentation} — AI will design clean buttons that produce readable reports</p>
+                  </div>
+                  <button onclick="closeAIBuilderModal()" class="text-white hover:bg-white hover:bg-opacity-20 rounded p-2">✕</button>
+                </div>
+
+                <!-- Body (scrollable) -->
+                <div class="p-4 overflow-y-auto flex-1">
+
+                  ${aiBuilderState.step === 'paste' ? `
+                  <div class="space-y-4">
+                    <div class="bg-blue-50 border-l-4 border-blue-400 p-3 text-sm text-blue-900 rounded">
+                      <p class="font-semibold mb-1">How this works:</p>
+                      <ol class="list-decimal ml-5 space-y-0.5 text-xs">
+                        <li>Click <strong>"📋 Copy Completeness Prompt"</strong> below</li>
+                        <li>Paste it into <strong>OpenEvidence</strong> and run the search</li>
+                        <li>Copy the OpenEvidence response back here into the box</li>
+                        <li>Click <strong>"🤖 Process with AI"</strong> — Claude will redesign your checklist</li>
+                        <li>Review and import the cleaned JSON</li>
+                      </ol>
+                    </div>
+
+                    <button onclick="copyCompletenessPromptForBuilder()" 
+                      class="w-full px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded font-medium text-sm">
+                      📋 Copy Completeness Prompt to Clipboard
+                    </button>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Paste OpenEvidence Response:</label>
+                      <textarea 
+                        id="ai-builder-oe-text"
+                        oninput="aiBuilderState.oeReviewText = this.value"
+                        class="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+                        rows="14"
+                        placeholder="Paste the full OpenEvidence response here, including any references and citations...">${aiBuilderState.oeReviewText}</textarea>
+                    </div>
+
+                    ${aiBuilderState.errorMessage ? `
+                    <div class="bg-red-50 border border-red-300 text-red-800 p-3 rounded text-sm">
+                      ⚠️ ${aiBuilderState.errorMessage}
+                    </div>
+                    ` : ''}
+
+                    <div class="flex gap-2">
+                      <button onclick="processWithAI()" 
+                        class="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold">
+                        🤖 Process with AI (auto)
+                      </button>
+                      <button onclick="switchToManualPaste()" 
+                        class="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm"
+                        title="No worker? Copy a prompt to Claude.ai and paste the response">
+                        Manual mode
+                      </button>
+                    </div>
+                  </div>
+                  ` : ''}
+
+                  ${aiBuilderState.step === 'processing' ? `
+                  <div class="py-12 text-center">
+                    <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-purple-200 border-t-purple-600 mb-4"></div>
+                    <p class="text-gray-700 font-medium">Claude is reviewing the OE response and designing your checklist...</p>
+                    <p class="text-xs text-gray-500 mt-2">This usually takes 20–40 seconds.</p>
+                  </div>
+                  ` : ''}
+
+                  ${aiBuilderState.step === 'manual_paste' ? `
+                  <div class="space-y-4">
+                    <div class="bg-amber-50 border-l-4 border-amber-400 p-3 text-sm text-amber-900 rounded">
+                      <p class="font-semibold mb-1">⚠️ Two-step process — don't get the boxes mixed up:</p>
+                      <ol class="list-decimal ml-5 space-y-0.5 text-xs">
+                        <li><strong>STEP 1:</strong> Click "Copy Prompt" below → paste into <a href="https://claude.ai" target="_blank" class="underline font-bold">claude.ai</a> (a separate tab/app)</li>
+                        <li><strong>STEP 2:</strong> Wait for Claude's reply (a JSON block starting with <code>{</code>)</li>
+                        <li><strong>STEP 3:</strong> Copy that JSON and paste it into the BOTTOM box here</li>
+                        <li><strong>STEP 4:</strong> Click "Use this JSON"</li>
+                      </ol>
+                    </div>
+
+                    <!-- STEP 1: The prompt (shown so user can see what they're copying) -->
+                    <div class="border-2 border-blue-300 rounded-lg p-3 bg-blue-50">
+                      <div class="flex items-center justify-between mb-2">
+                        <label class="text-sm font-bold text-blue-900">📤 STEP 1: Copy this prompt to claude.ai</label>
+                        <button onclick="copyManualPrompt()" 
+                          class="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium">
+                          📋 Copy Prompt
+                        </button>
+                      </div>
+                      <textarea 
+                        readonly
+                        class="w-full px-2 py-1 border rounded bg-white text-xs font-mono text-gray-600"
+                        rows="4"
+                        onclick="this.select()">${aiBuilderState.manualPromptText}</textarea>
+                      <p class="text-xs text-blue-700 mt-1 italic">↑ This contains your OE review + instructions for Claude</p>
+                    </div>
+
+                    <!-- STEP 3: Where the JSON response goes -->
+                    <div class="border-2 border-purple-300 rounded-lg p-3 bg-purple-50">
+                      <label class="block text-sm font-bold text-purple-900 mb-2">📥 STEP 3: Paste Claude's JSON response here</label>
+                      <textarea 
+                        id="ai-builder-manual-response"
+                        oninput="aiBuilderState.manualResponseText = this.value"
+                        class="w-full px-3 py-2 border rounded-lg text-xs font-mono bg-white"
+                        rows="10"
+                        placeholder='Should look like: { "presentation": "...", "features": [...] }'>${aiBuilderState.manualResponseText}</textarea>
+                      <p class="text-xs text-purple-700 mt-1 italic">↑ Paste ONLY the JSON, not the whole conversation</p>
+                    </div>
+
+                    ${aiBuilderState.errorMessage ? `
+                    <div class="bg-red-50 border border-red-300 text-red-800 p-3 rounded text-sm">
+                      ⚠️ ${aiBuilderState.errorMessage}
+                    </div>
+                    ` : ''}
+
+                    <div class="flex gap-2">
+                      <button onclick="useManualResponse()" 
+                        class="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold">
+                        ✓ STEP 4: Use this JSON
+                      </button>
+                      <button onclick="aiBuilderState.step='paste'; render()" 
+                        class="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm">
+                        ← Back
+                      </button>
+                    </div>
+                  </div>
+                  ` : ''}
+
+                  ${aiBuilderState.step === 'review' ? `
+                  <div class="space-y-3">
+                    <div class="bg-green-50 border-l-4 border-green-400 p-3 text-sm text-green-900 rounded">
+                      <p class="font-semibold">✓ AI processing complete</p>
+                      <p class="text-xs">${aiBuilderState.generatedJson?.features?.length || 0} features generated. Review and edit below before importing.</p>
+                    </div>
+
+                    ${aiBuilderState.generatedJson?._design_notes ? `
+                    <details class="bg-gray-50 border rounded p-2 text-xs">
+                      <summary class="font-semibold cursor-pointer text-gray-700">📝 AI's Design Notes (click to expand)</summary>
+                      <div class="mt-2 whitespace-pre-wrap text-gray-600">${aiBuilderState.generatedJson._design_notes}</div>
+                    </details>
+                    ` : ''}
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Generated JSON (editable):</label>
+                      <textarea 
+                        id="ai-builder-json"
+                        oninput="aiBuilderState.generatedJsonText = this.value"
+                        class="w-full px-3 py-2 border rounded-lg text-xs font-mono"
+                        rows="18">${aiBuilderState.generatedJsonText}</textarea>
+                    </div>
+
+                    ${aiBuilderState.errorMessage ? `
+                    <div class="bg-red-50 border border-red-300 text-red-800 p-3 rounded text-sm">
+                      ⚠️ ${aiBuilderState.errorMessage}
+                    </div>
+                    ` : ''}
+
+                    <div class="flex gap-2">
+                      <button onclick="importGeneratedJson(false)" 
+                        class="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold">
+                        ✓ Merge with existing
+                      </button>
+                      <button onclick="importGeneratedJson(true)" 
+                        class="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold"
+                        title="Discard your current customizations and use only the AI-generated features">
+                        ⚠️ Replace all
+                      </button>
+                      <button onclick="aiBuilderState.step='paste'; render()" 
+                        class="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm">
+                        ← Back
+                      </button>
+                    </div>
+                  </div>
+                  ` : ''}
+
+                </div>
+              </div>
+            </div>
+            ` : ''}
+
           </div>
         </div>
       `;
@@ -5856,6 +6070,385 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       
       return query;
     }
+
+    // ============================================================================
+    // AI BUILDER — Process OpenEvidence reviews into clean, road-tested JSON
+    // ============================================================================
+
+    // Editorial system prompt — the core "brains" of the feature.
+    // This is what makes the JSON produce clean prose reports.
+    function buildAIBuilderSystemPrompt() {
+      return `You are an expert clinical informatics editor designing a structured assessment checklist for a GP/ED clinical tool. Your output will populate buttons that doctors tap during patient encounters; the same data is rendered into a written clinical note. Your single most important goal: **the rendered note must read like polished doctor's prose, first time, with zero editing required.**
+
+## Architecture you are designing for
+
+Each "feature" becomes a button. When toggled "unsafe" (positive finding), the \`unsafe\` text drops into a sentence. When toggled "safe" (pertinent negative), the \`safe\` text drops in. Multiple features get joined with commas/"and" automatically.
+
+The report engine concatenates features into sentences like:
+> "Associated features: <unsafe>, <unsafe>, and <unsafe>. <Safe>, <safe>, and <safe>."
+> "On examination, <unsafe>. <Safe>."
+
+So your label text MUST be:
+- **A grammatical fragment that drops into prose** — never a question, never a header, never imperative
+- **Lowercase first letter** (the engine capitalises when needed)
+- **No leading "no"/"absent"/"denies"/"normal"** repetition — the engine handles negation framing
+- Examples of GOOD \`unsafe\` text: "radiates to left arm", "associated dyspnoea", "syncope at onset"
+- Examples of BAD \`unsafe\` text: "Does the pain radiate?", "Pain radiating to left arm", "Yes — radiation present"
+- Examples of GOOD \`safe\` text: "no radiation", "no associated dyspnoea", "no syncope"
+- Examples of BAD \`safe\` text: "Pain does not radiate", "Patient denies dyspnoea"
+
+## Schema for each feature
+
+\`\`\`
+{
+  "key": "snake_case_unique_id",
+  "safe": "fragment for pertinent negative",
+  "unsafe": "fragment for positive finding",
+  "type": "History" | "Examination" | "Investigation" | "Differential Diagnosis",
+  "buttonType": "tertiary" | "binary" | "severity" | "duration" | "pain-scale",
+  "redFlag": true | false,
+  "comment": "optional brief evidence note (≤120 chars) shown on hover",
+  "reportSection": "pain_character" | "associated_symptoms" | "risk_factors" | "triggers" | "general_exam" | "system_specific_exam" | "bedside_inv" | "imaging" | "bloods" | "ddx_serious" | "ddx_common"
+}
+\`\`\`
+
+## Editorial rules
+
+1. **Order matters.** Within each \`type\`, order features in the natural order a doctor describes them in a note (onset → character → radiation → associated symptoms → modifying factors → risk factors). The engine emits features in array order.
+
+2. **Group by reportSection.** Features with the same \`reportSection\` will be rendered as a single sentence. Use this aggressively — it is what makes reports flow.
+
+3. **Button types — choose deliberately:**
+   - \`tertiary\` (default): null → safe → unsafe → null. Use for most things.
+   - \`binary\`: safe ↔ unsafe (no null). Use for things that MUST be assessed (e.g. "stable / hemodynamically unstable").
+   - \`severity\`: null → mild → moderate → severe. Use for symptom severity where it changes management.
+   - \`duration\`: <5min / 5–30min / 30min–6hr / >6hr. Use ONLY for symptoms where duration is diagnostically critical.
+   - \`pain-scale\`: 0–10. Use ONLY for actual pain assessment.
+   - **Default to tertiary unless there is a clear reason.** Don't proliferate button types.
+
+4. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+
+5. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
+   - Is captured by a more general item already
+   - Is rarely diagnostically useful
+   - Is more appropriately a free-text field than a button
+
+6. **Phrasing test — apply to every label.** Write the sentence the report would produce and read it aloud:
+   - "Associated features: ___" — does \`unsafe\` text fit here?
+   - "There was no ___" — does \`safe\` text fit here?
+   - "On examination, ___" — does exam \`unsafe\` text fit here?
+   If any of these read awkwardly, rephrase.
+
+7. **Comments**: Add \`comment\` only where it adds genuine clinical pearl value (likelihood ratio, classic teaching, key distinction). Skip on obvious items.
+
+## Output format
+
+Return a SINGLE valid JSON object with this exact shape, and NOTHING else (no markdown, no commentary outside the JSON):
+
+\`\`\`
+{
+  "presentation": "<exact presentation name as given>",
+  "_design_notes": "<2–4 sentences explaining your editorial choices: what you kept, cut, regrouped, and why. Cite a sample sentence the report would produce as proof of readability.>",
+  "features": [ /* 20–30 features, ordered for natural prose flow */ ]
+}
+\`\`\`
+
+Do not include any other top-level keys. Do not wrap in markdown code blocks. Begin your response with \`{\` and end with \`}\`.`;
+    }
+
+    function buildAIBuilderUserMessage(presentation, oeReviewText, currentFeatures) {
+      let msg = `Presentation: ${presentation}\n\n`;
+      msg += `## OpenEvidence review to incorporate:\n\n`;
+      msg += oeReviewText.trim();
+      msg += `\n\n## My current checklist (for reference — feel free to redesign entirely):\n\n`;
+      
+      if (currentFeatures.length === 0) {
+        msg += `(Empty — design from scratch using the OE review.)\n`;
+      } else {
+        currentFeatures.forEach((f, i) => {
+          const flag = f.redFlag ? ' [RED FLAG]' : '';
+          msg += `${i + 1}. [${f.type || 'History'}] ${f.safe} / ${f.unsafe}${flag}\n`;
+        });
+      }
+      
+      msg += `\n## Your task:\n\n`;
+      msg += `Design a clean, prose-friendly checklist incorporating the OE review's evidence-based recommendations. `;
+      msg += `Apply ALL the editorial rules in the system prompt. The output must produce a polished, readable note when features are toggled.\n\n`;
+      msg += `Return only the JSON object — no other text.`;
+      
+      return msg;
+    }
+
+    function getCurrentFeaturesForPresentation(presentation) {
+      let allFeatures = [];
+      if (MASTER_FEATURES[presentation]) {
+        const customization = userPreferences.customizations.presentations[presentation];
+        if (customization) {
+          allFeatures = [
+            ...(customization.features || MASTER_FEATURES[presentation] || []),
+            ...(customization.customFeatures || [])
+          ];
+        } else {
+          allFeatures = MASTER_FEATURES[presentation] || [];
+        }
+      } else {
+        const customPres = userPreferences.customizations.customPresentations?.find(cp => cp.name === presentation);
+        if (customPres) allFeatures = customPres.features || [];
+      }
+      return allFeatures.filter(f => f != null);
+    }
+
+    window.openAIBuilderModal = function(presentation) {
+      aiBuilderModalOpen = true;
+      aiBuilderState = {
+        presentation: presentation,
+        step: 'paste',
+        oeReviewText: '',
+        generatedJson: null,
+        generatedJsonText: '',
+        manualPromptText: '',
+        manualResponseText: '',
+        errorMessage: '',
+        processing: false
+      };
+      render();
+    };
+
+    window.closeAIBuilderModal = function() {
+      aiBuilderModalOpen = false;
+      render();
+    };
+
+    window.copyCompletenessPromptForBuilder = function() {
+      const query = buildCompletenessQuery(aiBuilderState.presentation);
+      navigator.clipboard.writeText(query).then(() => {
+        alert('Completeness prompt copied to clipboard.\n\nNow paste it into OpenEvidence.');
+      }).catch(() => alert('Copy failed — please manually select the text.'));
+    };
+
+    window.processWithAI = async function() {
+      const oeText = aiBuilderState.oeReviewText.trim();
+      if (oeText.length < 50) {
+        aiBuilderState.errorMessage = 'Please paste the full OpenEvidence response (at least a few sentences).';
+        render();
+        return;
+      }
+      
+      if (!WORKER_URL) {
+        // No worker configured → fall through to manual mode
+        switchToManualPaste();
+        return;
+      }
+
+      aiBuilderState.errorMessage = '';
+      aiBuilderState.step = 'processing';
+      render();
+
+      try {
+        const currentFeatures = getCurrentFeaturesForPresentation(aiBuilderState.presentation);
+        const systemPrompt = buildAIBuilderSystemPrompt();
+        const userMessage = buildAIBuilderUserMessage(aiBuilderState.presentation, oeText, currentFeatures);
+
+        const response = await fetch(`${WORKER_URL}/api/claude`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5-20250929',
+            max_tokens: 4000,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userMessage }]
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Worker returned ${response.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const data = await response.json();
+        
+        // Extract text from response
+        let aiText = '';
+        if (data.content && Array.isArray(data.content)) {
+          aiText = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+        } else if (typeof data.completion === 'string') {
+          aiText = data.completion;
+        } else {
+          throw new Error('Unexpected response format from Claude');
+        }
+
+        // Parse the JSON (allow for code fences just in case)
+        const jsonText = extractJsonFromText(aiText);
+        const parsed = JSON.parse(jsonText);
+        
+        if (!parsed.features || !Array.isArray(parsed.features)) {
+          throw new Error('AI response missing "features" array');
+        }
+        
+        aiBuilderState.generatedJson = parsed;
+        aiBuilderState.generatedJsonText = JSON.stringify(parsed, null, 2);
+        aiBuilderState.step = 'review';
+        aiBuilderState.errorMessage = '';
+        render();
+        
+      } catch (err) {
+        console.error('AI processing error:', err);
+        aiBuilderState.step = 'paste';
+        aiBuilderState.errorMessage = `AI processing failed: ${err.message}. You can try "Manual mode" instead.`;
+        render();
+      }
+    };
+
+    function extractJsonFromText(text) {
+      // Strip markdown code fences if present
+      let cleaned = text.trim();
+      cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '');
+      // Find first { and last } to bracket the JSON
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+        throw new Error('No JSON object found in response');
+      }
+      return cleaned.slice(firstBrace, lastBrace + 1);
+    }
+
+    window.switchToManualPaste = function() {
+      const oeText = aiBuilderState.oeReviewText.trim();
+      if (oeText.length < 50) {
+        aiBuilderState.errorMessage = 'Please paste the OpenEvidence response first.';
+        render();
+        return;
+      }
+      const currentFeatures = getCurrentFeaturesForPresentation(aiBuilderState.presentation);
+      const systemPrompt = buildAIBuilderSystemPrompt();
+      const userMsg = buildAIBuilderUserMessage(aiBuilderState.presentation, oeText, currentFeatures);
+      
+      // Combine into single prompt for claude.ai
+      aiBuilderState.manualPromptText = 
+        `# Instructions\n\n${systemPrompt}\n\n---\n\n# Your task\n\n${userMsg}`;
+      aiBuilderState.step = 'manual_paste';
+      aiBuilderState.errorMessage = '';
+      render();
+    };
+
+    window.copyManualPrompt = function() {
+      navigator.clipboard.writeText(aiBuilderState.manualPromptText).then(() => {
+        alert('Prompt copied!\n\nNow open claude.ai in a new tab, paste it, and paste Claude\'s JSON response back here.');
+      }).catch(() => alert('Copy failed.'));
+    };
+
+    window.useManualResponse = function() {
+      const text = aiBuilderState.manualResponseText.trim();
+      if (!text) {
+        aiBuilderState.errorMessage = 'Paste the JSON response first.';
+        render();
+        return;
+      }
+      try {
+        const jsonText = extractJsonFromText(text);
+        const parsed = JSON.parse(jsonText);
+        if (!parsed.features || !Array.isArray(parsed.features)) {
+          throw new Error('Response missing "features" array');
+        }
+        aiBuilderState.generatedJson = parsed;
+        aiBuilderState.generatedJsonText = JSON.stringify(parsed, null, 2);
+        aiBuilderState.step = 'review';
+        aiBuilderState.errorMessage = '';
+        render();
+      } catch (err) {
+        aiBuilderState.errorMessage = `Could not parse JSON: ${err.message}`;
+        render();
+      }
+    };
+
+    window.importGeneratedJson = function(replaceAll) {
+      // Re-parse from textarea in case the user edited
+      let parsed;
+      try {
+        parsed = JSON.parse(aiBuilderState.generatedJsonText);
+      } catch (err) {
+        aiBuilderState.errorMessage = `JSON is no longer valid: ${err.message}`;
+        render();
+        return;
+      }
+      
+      if (!parsed.features || !Array.isArray(parsed.features)) {
+        aiBuilderState.errorMessage = 'JSON must have a "features" array.';
+        render();
+        return;
+      }
+
+      const presentation = aiBuilderState.presentation;
+      const isBuiltIn = !!MASTER_FEATURES[presentation];
+      
+      // Normalise features — strip _design_notes and any unknown top-level fields
+      const cleanFeatures = parsed.features.map(f => {
+        const out = {
+          key: f.key || `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          safe: f.safe || '',
+          unsafe: f.unsafe || '',
+          type: f.type || 'History',
+          visible: f.visible !== false,
+          redFlag: !!f.redFlag,
+          buttonType: f.buttonType || 'tertiary'
+        };
+        if (f.comment) out.comment = f.comment;
+        if (f.reportSection) out.reportSection = f.reportSection;
+        return out;
+      });
+
+      if (isBuiltIn) {
+        if (replaceAll || !userPreferences.customizations.presentations[presentation]) {
+          userPreferences.customizations.presentations[presentation] = {
+            features: cleanFeatures,
+            customFeatures: []
+          };
+        } else {
+          // Merge by key — incoming features win on conflicts, new ones appended
+          const existing = userPreferences.customizations.presentations[presentation];
+          const existingKeys = new Set((existing.features || []).map(f => f.key));
+          const updated = (existing.features || []).map(f => {
+            const incoming = cleanFeatures.find(c => c.key === f.key);
+            return incoming || f;
+          });
+          cleanFeatures.forEach(c => {
+            if (!existingKeys.has(c.key)) updated.push(c);
+          });
+          existing.features = updated;
+        }
+      } else {
+        // Custom presentation
+        if (!userPreferences.customizations.customPresentations) {
+          userPreferences.customizations.customPresentations = [];
+        }
+        const idx = userPreferences.customizations.customPresentations.findIndex(cp => cp.name === presentation);
+        if (idx >= 0) {
+          if (replaceAll) {
+            userPreferences.customizations.customPresentations[idx].features = cleanFeatures;
+          } else {
+            const existing = userPreferences.customizations.customPresentations[idx].features || [];
+            const existingKeys = new Set(existing.map(f => f.key));
+            const updated = existing.map(f => {
+              const incoming = cleanFeatures.find(c => c.key === f.key);
+              return incoming || f;
+            });
+            cleanFeatures.forEach(c => {
+              if (!existingKeys.has(c.key)) updated.push(c);
+            });
+            userPreferences.customizations.customPresentations[idx].features = updated;
+          }
+        } else {
+          userPreferences.customizations.customPresentations.push({
+            name: presentation,
+            features: cleanFeatures
+          });
+        }
+      }
+      
+      saveCustomizationsSilent();
+      closeAIBuilderModal();
+      alert(`✓ Imported ${cleanFeatures.length} features for "${presentation}".\n\nOpen the presentation tab to review them.`);
+    };
 
     window.copyOEQuery = function() {
       const text = document.getElementById('oe-query-text').textContent;
