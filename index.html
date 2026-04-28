@@ -3126,107 +3126,133 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       return str.charAt(0).toLowerCase() + str.slice(1);
     }
 
+    // Helper: given a feature and its current state, return the rendered text
+    // for that feature (or null if no value to show), plus whether it's a positive
+    // (unsafe/abnormal) or negative (safe/normal) finding.
+    // Returns { text: string, polarity: 'positive'|'negative' } or null.
+    function renderFeatureValue(feature, featuresData) {
+      const state = featuresData[feature.key];
+      const note = patientData.notes && patientData.notes[feature.key];
+      const buttonType = feature.buttonType || 'tertiary';
+
+      // Custom note overrides everything; treat it as a positive finding (it's
+      // there because the doctor felt it warranted recording).
+      if (note) {
+        return { text: note, polarity: 'positive' };
+      }
+
+      switch (buttonType) {
+        case 'binary':
+          if (state === 'unsafe') return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
+          if (state === 'safe') return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          return null;
+        case 'severity':
+          if (state === 'mild' || state === 'moderate' || state === 'severe') {
+            return { text: `${lowercaseFirst(feature.unsafe)} (${state})`, polarity: 'positive' };
+          }
+          return null;
+        case 'duration':
+          if (state && state !== 'null') {
+            const durationText = {
+              'short': '<5 min',
+              'medium': '5-30 min',
+              'long': '30min-6hr',
+              'very-long': '>6 hours'
+            }[state] || state;
+            return { text: `${lowercaseFirst(feature.unsafe)} (duration: ${durationText})`, polarity: 'positive' };
+          }
+          return null;
+        case 'pain-scale':
+          if (state && state !== 'null') {
+            return { text: `${lowercaseFirst(feature.unsafe)} (${state}/10)`, polarity: 'positive' };
+          }
+          return null;
+        case 'tertiary':
+        default:
+          if (state === 'unsafe') return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
+          if (state === 'safe') return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          return null;
+      }
+    }
+
+    // Section ordering for HOPC prose. Features tagged with these reportSection
+    // values render in this order. Any feature without a reportSection (or with
+    // a value not listed here) falls into the "_other" bucket at the end.
+    const HOPC_SECTION_ORDER = [
+      'pain_character',
+      'triggers',
+      'associated_symptoms',
+      'risk_factors',
+      '_other'
+    ];
+
+    // Build a single telegraphic sentence/phrase for a group of features.
+    // Positives are listed plainly; negatives are prefixed with "No ".
+    // Examples:
+    //   positives only: "radiates to left arm with associated dyspnoea"
+    //   negatives only: "no nausea, syncope, or palpitations"
+    //   both: "radiates to left arm; no nausea or syncope"
+    function buildSectionSentence(positives, negatives) {
+      const parts = [];
+      if (positives.length > 0) {
+        parts.push(formatList(positives));
+      }
+      if (negatives.length > 0) {
+        // Strip leading "no " from each negative since we'll add a single "No" at the front
+        const stripped = negatives.map(n => n.replace(/^no\s+/i, ''));
+        parts.push(`no ${formatList(stripped, 'or')}`);
+      }
+      if (parts.length === 0) return null;
+      // Capitalise the first character of the resulting sentence.
+      const joined = parts.join('; ');
+      return joined.charAt(0).toUpperCase() + joined.slice(1) + '.';
+    }
+
     function formatFeaturesProse(featuresData, presentation) {
       if (!presentation) {
         return null;
       }
 
-      const positives = [];
-      const negatives = [];
-      const mentionedItems = new Set(); // Track what we mention for deduplication
-      
-      // Get ALL features (both regular and custom)
+      const mentionedItems = new Set(); // For deduplication against ROS
+
+      // Group history features by reportSection
+      const groups = {}; // { sectionKey: { positives: [], negatives: [] } }
+
       const allFeatures = getCustomizedFeatures(presentation);
-      
+
       allFeatures.forEach(feature => {
-        // ONLY include History-type features (Exam features go in Examination section)
-        if (feature.type !== "History") return;
-        
-        const state = featuresData[feature.key];
-        const note = patientData.notes && patientData.notes[feature.key];
-        const buttonType = feature.buttonType || 'tertiary';
-        
-        // If there's a custom note, always include it (regardless of state)
-        if (note) {
-          positives.push(note);
-          mentionedItems.add(lowercaseFirst(note));
+        // Only History-type features go into HOPC prose
+        if (feature.type !== 'History') return;
+
+        const rendered = renderFeatureValue(feature, featuresData);
+        if (!rendered) return;
+
+        // Track for ROS dedup
+        mentionedItems.add(rendered.text);
+
+        // Bucket into the right section
+        const sectionKey = (feature.reportSection && HOPC_SECTION_ORDER.includes(feature.reportSection))
+          ? feature.reportSection
+          : '_other';
+        if (!groups[sectionKey]) groups[sectionKey] = { positives: [], negatives: [] };
+        if (rendered.polarity === 'positive') {
+          groups[sectionKey].positives.push(rendered.text);
         } else {
-          // Handle based on button type
-          switch (buttonType) {
-            case 'binary':
-              if (state === 'unsafe') {
-                const text = lowercaseFirst(feature.unsafe);
-                positives.push(text);
-                mentionedItems.add(text);
-              } else if (state === 'safe') {
-                const text = lowercaseFirst(feature.safe);
-                negatives.push(text);
-                mentionedItems.add(text);
-              }
-              break;
-              
-            case 'severity':
-              if (state === 'mild' || state === 'moderate' || state === 'severe') {
-                const text = `${lowercaseFirst(feature.unsafe)} (${state})`;
-                positives.push(text);
-                mentionedItems.add(text);
-              }
-              break;
-              
-            case 'duration':
-              if (state && state !== 'null') {
-                const durationText = {
-                  'short': '<5 min',
-                  'medium': '5-30 min',
-                  'long': '30min-6hr',
-                  'very-long': '>6 hours'
-                }[state] || state;
-                const text = `${lowercaseFirst(feature.unsafe)} (duration: ${durationText})`;
-                positives.push(text);
-                mentionedItems.add(text);
-              }
-              break;
-              
-            case 'pain-scale':
-              if (state && state !== 'null') {
-                const text = `${lowercaseFirst(feature.unsafe)} (${state}/10)`;
-                positives.push(text);
-                mentionedItems.add(text);
-              }
-              break;
-              
-            case 'tertiary':
-            default:
-              if (state === "unsafe") {
-                const text = lowercaseFirst(feature.unsafe);
-                positives.push(text);
-                mentionedItems.add(text);
-              } else if (state === "safe") {
-                const text = lowercaseFirst(feature.safe);
-                negatives.push(text);
-                mentionedItems.add(text);
-              }
-              break;
-          }
+          groups[sectionKey].negatives.push(rendered.text);
         }
       });
 
+      // Emit groups in the canonical order, skipping empty ones
       const sentences = [];
-      
-      if (positives.length > 0) {
-        sentences.push(`Associated features: ${formatList(positives)}.`);
-      }
-      
-      if (negatives.length > 0) {
-        // Capitalize first item and list directly without "There were/was"
-        const capitalized = negatives.map((item, index) => 
-          index === 0 ? item.charAt(0).toUpperCase() + item.slice(1) : item
-        );
-        sentences.push(`${formatList(capitalized)}.`);
-      }
-      
+      HOPC_SECTION_ORDER.forEach(sectionKey => {
+        const group = groups[sectionKey];
+        if (!group) return;
+        const sentence = buildSectionSentence(group.positives, group.negatives);
+        if (sentence) sentences.push(sentence);
+      });
+
       return {
-        text: sentences.length > 0 ? sentences.join(" ") : null,
+        text: sentences.length > 0 ? sentences.join(' ') : null,
         mentioned: mentionedItems
       };
     }
@@ -3300,120 +3326,117 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
     function formatExamProse(examData, presentation = null) {
       const findings = {};
-      
-      // First, add Exam-type features from presentation-specific features (including custom)
-      if (presentation) {
-        const allFeatures = getCustomizedFeatures(presentation);
-        // Handle both "Exam" (legacy) and "Examination" (new)
-        const examFeatures = allFeatures.filter(f => f.type === "Exam" || f.type === "Examination");
-        
-        if (examFeatures.length > 0) {
-          const positive = [];
-          const negative = [];
-          
-          examFeatures.forEach(feature => {
-            const state = patientData.features[feature.key];
-            const note = patientData.notes && patientData.notes[feature.key];
-            
-            if (state === "safe") {
-              const text = lowercaseFirst(feature.safe);
-              negative.push(note ? note : text);
-            } else if (state === "unsafe") {
-              const text = lowercaseFirst(feature.unsafe);
-              positive.push(note ? note : text);
-            }
-          });
-          
-          // Add to findings under "Presentation-specific"
-          if (positive.length > 0 || negative.length > 0) {
-            findings["Presentation-specific"] = { positive, negative };
-          }
-        }
-      }
-      
-      // Then, add standard examination sections
+
+      // Helper to push into a section's findings, creating it if needed
+      const addFinding = (section, polarity, text) => {
+        if (!findings[section]) findings[section] = { positive: [], negative: [] };
+        if (polarity === 'positive') findings[section].positive.push(text);
+        else findings[section].negative.push(text);
+      };
+
+      // 1. Standard examination sections (General / Cardiovascular / etc.)
       Object.entries(EXAM_SECTIONS).forEach(([section, buttons]) => {
-        const positive = [];
-        const negative = [];
-        
         buttons.forEach(btn => {
           const state = examData[btn.key];
           const note = patientData.notes && patientData.notes[btn.key];
-          
-          // Get custom text if available
+
           const custom = userPreferences.customizations.exam[btn.key] || {};
           const displaySafe = custom.safe || btn.safe;
           const displayUnsafe = custom.unsafe || btn.unsafe;
-          
-          // If there's a custom note, always include it (regardless of state)
+
           if (note) {
-            positive.push(note);
-          } else if (state === "safe") {
-            const text = lowercaseFirst(displaySafe);
-            negative.push(text);
-          } else if (state === "unsafe") {
-            const text = lowercaseFirst(displayUnsafe);
-            positive.push(text);
+            addFinding(section, 'positive', note);
+          } else if (state === 'safe') {
+            addFinding(section, 'negative', lowercaseFirst(displaySafe));
+          } else if (state === 'unsafe') {
+            addFinding(section, 'positive', lowercaseFirst(displayUnsafe));
           }
         });
-        
-        // Add custom exam items for this section
+
+        // Custom exam items the user added under this section
         (userPreferences.customizations.customExam || [])
           .filter(item => item && item.section === section)
           .forEach(item => {
             const state = examData[item.key];
             const note = patientData.notes && patientData.notes[item.key];
-            
-            // If there's a custom note, always include it (regardless of state)
             if (note) {
-              positive.push(note);
-            } else if (state === "safe") {
-              const text = lowercaseFirst(item.safe);
-              negative.push(text);
-            } else if (state === "unsafe") {
-              const text = lowercaseFirst(item.unsafe);
-              positive.push(text);
+              addFinding(section, 'positive', note);
+            } else if (state === 'safe') {
+              addFinding(section, 'negative', lowercaseFirst(item.safe));
+            } else if (state === 'unsafe') {
+              addFinding(section, 'positive', lowercaseFirst(item.unsafe));
             }
           });
-        
-        // Only include section if something was toggled
-        if (positive.length > 0 || negative.length > 0) {
-          findings[section] = { positive, negative };
+      });
+
+      // 2. Presentation-specific exam features fold into their declared examSystem.
+      //    Features without examSystem fall back to a "Presentation-specific" bucket
+      //    so nothing gets lost (existing data without the new field still works).
+      if (presentation) {
+        const allFeatures = getCustomizedFeatures(presentation);
+        const examFeatures = allFeatures.filter(f => f.type === 'Exam' || f.type === 'Examination');
+
+        examFeatures.forEach(feature => {
+          const state = patientData.features[feature.key];
+          const note = patientData.notes && patientData.notes[feature.key];
+
+          let text = null;
+          let polarity = null;
+
+          if (note) {
+            text = note;
+            polarity = 'positive';
+          } else if (state === 'safe') {
+            text = lowercaseFirst(feature.safe);
+            polarity = 'negative';
+          } else if (state === 'unsafe') {
+            text = lowercaseFirst(feature.unsafe);
+            polarity = 'positive';
+          }
+
+          if (text === null) return;
+
+          // examSystem must match a real EXAM_SECTIONS key to be folded in
+          const targetSection = (feature.examSystem && EXAM_SECTIONS[feature.examSystem])
+            ? feature.examSystem
+            : 'Presentation-specific';
+          addFinding(targetSection, polarity, text);
+        });
+      }
+
+      // 3. Render. Standard sections in EXAM_SECTIONS order, then anything else
+      //    (which in practice means "Presentation-specific" only).
+      const sectionOrder = [
+        ...Object.keys(EXAM_SECTIONS),
+        ...Object.keys(findings).filter(s => !(s in EXAM_SECTIONS))
+      ];
+
+      const sentences = [];
+      sectionOrder.forEach(section => {
+        const f = findings[section];
+        if (!f) return;
+        const { positive, negative } = f;
+
+        let body = '';
+        if (positive.length > 0 && negative.length > 0) {
+          body = `${formatList(positive)}, but ${formatList(negative)}`;
+        } else if (positive.length > 0) {
+          body = formatList(positive);
+        } else if (negative.length > 0) {
+          body = formatList(negative);
+        } else {
+          return;
+        }
+
+        // "Presentation-specific" gets no label prefix (legacy behaviour)
+        if (section === 'Presentation-specific') {
+          sentences.push(`${body}.`);
+        } else {
+          sentences.push(`${section}: ${body}.`);
         }
       });
 
-      const sentences = [];
-      
-      Object.entries(findings).forEach(([section, { positive, negative }]) => {
-        const parts = [];
-        
-        if (positive.length > 0 && negative.length > 0) {
-          // Both positive and negative findings
-          parts.push(`${formatList(positive)}, but ${formatList(negative)}`);
-        } else if (positive.length > 0) {
-          // Only positive findings
-          parts.push(formatList(positive));
-        } else if (negative.length > 0) {
-          // Only negative findings
-          parts.push(formatList(negative));
-        }
-        
-        if (parts.length > 0) {
-          // Don't include section label for "Presentation-specific" - just output the findings
-          if (section === "Presentation-specific") {
-            sentences.push(`${parts.join("")}.`);
-          } else {
-            sentences.push(`${section}: ${parts.join("")}.`);
-          }
-        }
-      });
-      
-      // Return null if nothing was toggled (so Examination section can be omitted)
-      if (sentences.length === 0) {
-        return null;
-      }
-      
-      return sentences.join(" ");
+      return sentences.length > 0 ? sentences.join(' ') : null;
     }
 
     // ============================================================================
@@ -4932,6 +4955,20 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                         <option value="pain-scale" ${feature.buttonType === 'pain-scale' ? 'selected' : ''}>Pain Scale (0-10)</option>
                                       </select>
                                     </div>
+                                    ${(currentType === 'Examination' || currentType === 'Exam') ? `
+                                    <div class="mt-2">
+                                      <label class="block text-xs text-gray-600 mb-1">🩺 Render under exam system:</label>
+                                      <select 
+                                        onchange="event.stopPropagation(); changeExamSystem('${presentation}', ${idx}, this.value)"
+                                        onclick="event.stopPropagation()"
+                                        class="w-full text-xs px-2 py-1 border rounded">
+                                        <option value="" ${!feature.examSystem ? 'selected' : ''}>— Presentation-specific (default) —</option>
+                                        ${Object.keys(EXAM_SECTIONS).map(sysName => `
+                                          <option value="${sysName}" ${feature.examSystem === sysName ? 'selected' : ''}>${sysName}</option>
+                                        `).join('')}
+                                      </select>
+                                    </div>
+                                    ` : ''}
                                     <div class="mt-2">
                                       <label class="block text-xs text-gray-600 mb-1">💡 Educational Comment (hover tooltip):</label>
                                       <textarea 
@@ -6174,17 +6211,37 @@ So your label text MUST be:
   "buttonType": "tertiary" | "binary" | "severity" | "duration" | "pain-scale",
   "redFlag": true | false,
   "comment": "optional brief evidence note (≤120 chars) shown on hover",
-  "reportSection": "pain_character" | "associated_symptoms" | "risk_factors" | "triggers" | "general_exam" | "system_specific_exam" | "bedside_inv" | "imaging" | "bloods" | "ddx_serious" | "ddx_common"
+  "reportSection": "pain_character" | "associated_symptoms" | "risk_factors" | "triggers",
+  "examSystem": "General" | "Cardiovascular" | "Respiratory" | "Abdominal" | "Neurological" | "Musculoskeletal"
 }
 \`\`\`
+
+\`reportSection\` applies only to History-type features. \`examSystem\` applies only to Examination-type features. Omit each field on features where it doesn't apply.
 
 ## Editorial rules
 
 1. **Order matters.** Within each \`type\`, order features in the natural order a doctor describes them in a note (onset → character → radiation → associated symptoms → modifying factors → risk factors). The engine emits features in array order.
 
-2. **Group by reportSection.** Features with the same \`reportSection\` will be rendered as a single sentence. Use this aggressively — it is what makes reports flow.
+2. **Group History features by reportSection — this is critical for readable output.** Features with the same \`reportSection\` render as a single telegraphic sentence in the HOPC. Use the four allowed values:
+   - \`pain_character\` — quality, location, radiation, severity, onset pattern
+   - \`triggers\` — what brings it on or worsens it (exertion, food, position, time of day)
+   - \`associated_symptoms\` — concurrent features (dyspnoea, nausea, diaphoresis, etc.)
+   - \`risk_factors\` — predisposing history (smoking, family history, comorbidities)
 
-3. **Button types — choose deliberately:**
+   The output looks like: "Pain radiates to left arm. Triggered by exertion. Associated dyspnoea and diaphoresis. No nausea, syncope, or palpitations. Smoker, hypertensive."
+   Each section is one short sentence. Plan your features so they cluster cleanly into these four groups.
+
+3. **Tag Examination features with examSystem so they render under the right body system.** Use the system that matches where a doctor would document the finding, not where the symptom presents:
+   - \`General\` — appearance, vital signs, hydration, alertness
+   - \`Cardiovascular\` — pulses, JVP, heart sounds, peripheral oedema, perfusion
+   - \`Respiratory\` — chest signs, work of breathing, oxygenation
+   - \`Abdominal\` — tenderness, masses, peritonism, organomegaly, bowel sounds
+   - \`Neurological\` — GCS, cranial nerves, power, sensation, reflexes, gait
+   - \`Musculoskeletal\` — ROM, swelling, deformity, tenderness in bones/joints
+
+   Untagged exam features fall into a generic "Presentation-specific" bucket — avoid this; tag every exam feature.
+
+4. **Button types — choose deliberately:**
    - \`tertiary\` (default): null → safe → unsafe → null. Use for most things.
    - \`binary\`: safe ↔ unsafe (no null). Use for things that MUST be assessed (e.g. "stable / hemodynamically unstable").
    - \`severity\`: null → mild → moderate → severe. Use for symptom severity where it changes management.
@@ -6192,20 +6249,20 @@ So your label text MUST be:
    - \`pain-scale\`: 0–10. Use ONLY for actual pain assessment.
    - **Default to tertiary unless there is a clear reason.** Don't proliferate button types.
 
-4. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+5. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
 
-5. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
+6. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
    - Is captured by a more general item already
    - Is rarely diagnostically useful
    - Is more appropriately a free-text field than a button
 
-6. **Phrasing test — apply to every label.** Write the sentence the report would produce and read it aloud:
-   - "Associated features: ___" — does \`unsafe\` text fit here?
-   - "There was no ___" — does \`safe\` text fit here?
-   - "On examination, ___" — does exam \`unsafe\` text fit here?
-   If any of these read awkwardly, rephrase.
+7. **Phrasing test — apply to every label.** The HOPC renders telegraphically — short clipped sentences, doctor-style. Read your sentence aloud:
+   - Within a reportSection group, positives become "<unsafe1>, <unsafe2>, and <unsafe3>"; negatives become "no <unsafe1>, <unsafe2>, or <unsafe3>"
+   - Worked example for pain_character group: "Pain radiates to left arm, sharp in quality, with sudden onset."
+   - Worked example for negatives in associated_symptoms: "No nausea, syncope, or palpitations."
+   If your label doesn't read cleanly when slotted in like that, rephrase it.
 
-7. **Comments**: Add \`comment\` only where it adds genuine clinical pearl value (likelihood ratio, classic teaching, key distinction). Skip on obvious items.
+8. **Comments**: Add \`comment\` only where it adds genuine clinical pearl value (likelihood ratio, classic teaching, key distinction). Skip on obvious items.
 
 ## Output format
 
@@ -6468,6 +6525,7 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         };
         if (f.comment) out.comment = f.comment;
         if (f.reportSection) out.reportSection = f.reportSection;
+        if (f.examSystem) out.examSystem = f.examSystem;
         return out;
       });
 
@@ -6682,6 +6740,44 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         customization.customFeatures[customIdx].buttonType = newButtonType;
       }
       
+      saveCustomizationsSilent();
+      render();
+    };
+
+    window.changeExamSystem = function(presentation, idx, newExamSystem) {
+      if (!userPreferences.customizations.presentations[presentation]) {
+        userPreferences.customizations.presentations[presentation] = {
+          features: MASTER_FEATURES[presentation].map(f => ({
+            ...f,
+            visible: true,
+            redFlag: f.redFlag || false,
+            type: f.type || 'History'
+          })),
+          customFeatures: []
+        };
+      }
+
+      const customization = userPreferences.customizations.presentations[presentation];
+      const numRegularFeatures = customization.features.length;
+
+      // Empty string means "no examSystem set" — store as undefined to keep JSON tidy
+      const value = newExamSystem || undefined;
+
+      if (idx < numRegularFeatures) {
+        if (value === undefined) {
+          delete customization.features[idx].examSystem;
+        } else {
+          customization.features[idx].examSystem = value;
+        }
+      } else {
+        const customIdx = idx - numRegularFeatures;
+        if (value === undefined) {
+          delete customization.customFeatures[customIdx].examSystem;
+        } else {
+          customization.customFeatures[customIdx].examSystem = value;
+        }
+      }
+
       saveCustomizationsSilent();
       render();
     };
