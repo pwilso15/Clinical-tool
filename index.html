@@ -2179,7 +2179,30 @@
     // ============================================================================
     
     let currentUser = null;
-    
+
+    // Tracks whether Supabase session is dead. When true, a banner appears at top of app
+    // and reminds the user to sign in again. Flipped on by:
+    //   1. The on-load session probe (verifySessionOnLoad)
+    //   2. Any failed save that throws an auth error
+    // Flipped off when a save succeeds.
+    let sessionExpired = false;
+
+    // Identify an error as auth-related by inspecting message and code fields.
+    // Used both in save paths and the on-load probe.
+    function isAuthError(err) {
+      if (!err) return false;
+      const msg = (err.message || '').toLowerCase();
+      const code = err.code || '';
+      return (
+        msg.includes('jwt') ||
+        msg.includes('refresh token') ||
+        msg.includes('session expired') ||
+        msg.includes('not authenticated') ||
+        msg.includes('invalid') && msg.includes('token') ||
+        code === 'PGRST301'
+      );
+    }
+
     // User preferences - SAVED TO DATABASE
     let userPreferences = {
       customizations: {
@@ -2747,6 +2770,10 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
         if (error && error.code !== 'PGRST116') {
           console.error('Error loading preferences:', error);
+          if (isAuthError(error)) {
+            console.error('Auth error during load — session is dead');
+            sessionExpired = true;
+          }
           return;
         }
 
@@ -2818,7 +2845,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     async function saveUserPreferences(prefs) {
       if (!currentUser) {
         console.warn('Cannot save: no user logged in');
-        throw new Error('Not authenticated. Please sign in again.');
+        const err = new Error('Not authenticated. Please sign in again.');
+        if (!sessionExpired) { sessionExpired = true; render(); }
+        throw err;
       }
 
       try {
@@ -2833,26 +2862,29 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
         if (error) {
           console.error('Error saving preferences:', error);
-          
-          // Check if it's an auth error
-          if (error.message && (
-            error.message.includes('JWT') || 
-            error.message.includes('token') || 
-            error.message.includes('auth') ||
-            error.code === 'PGRST301'
-          )) {
-            console.error('Authentication error detected - session may have expired');
+
+          if (isAuthError(error)) {
+            console.error('Authentication error detected — session expired');
+            if (!sessionExpired) { sessionExpired = true; render(); }
             throw new Error('Session expired. Please sign out and sign in again to save changes.');
           }
-          
+
           throw error;
         }
 
         userPreferences = prefs;
         console.log('Preferences saved to Supabase successfully');
-        
+
+        // Save succeeded — auth is healthy again. Clear the banner if it was up.
+        if (sessionExpired) { sessionExpired = false; render(); }
+
       } catch (error) {
         console.error('Failed to save preferences:', error);
+        // If the error is auth-flavoured even when not flagged above, raise the banner.
+        if (isAuthError(error) && !sessionExpired) {
+          sessionExpired = true;
+          render();
+        }
         throw error;
       }
     }
@@ -3989,21 +4021,39 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           console.error('Error loading collapsed sections:', e);
         }
       }
-      
-      const { data: { session } } = await supabaseClient.auth.getSession();
-      
-      if (session) {
-        currentUser = session.user;
-        await loadUserPreferences();
+
+      // Probe Supabase for the current session. If the refresh token is dead,
+      // getSession() typically still returns a session object (cached locally)
+      // but the first server-side request will fail with an auth error. We catch
+      // both cases so the banner shows up immediately on load instead of only
+      // after the user tries to save.
+      try {
+        const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+
+        if (sessionError) {
+          console.error('Session probe failed:', sessionError);
+          if (isAuthError(sessionError)) sessionExpired = true;
+        }
+
+        if (session) {
+          currentUser = session.user;
+          await loadUserPreferences();  // this also flips sessionExpired on auth error
+        }
+      } catch (probeErr) {
+        console.error('Initialize probe error:', probeErr);
+        if (isAuthError(probeErr)) sessionExpired = true;
       }
 
       supabaseClient.auth.onAuthStateChange(async (event, session) => {
         if (session) {
           currentUser = session.user;
+          // Fresh session = healthy auth. Reset the banner.
+          sessionExpired = false;
           await loadUserPreferences();
         } else {
           currentUser = null;
           userPreferences = {};
+          sessionExpired = false;
         }
         render();
       });
@@ -4119,6 +4169,15 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         <div class="min-h-screen bg-gray-50">
           <!-- Header -->
           <div class="bg-white shadow-sm border-b sticky top-0 z-50">
+            ${sessionExpired ? `
+            <div class="bg-red-600 text-white px-4 py-2 text-sm flex items-center justify-between gap-2">
+              <span>⚠️ <strong>Session expired.</strong> Saves are not syncing to the cloud. Sign in again to continue.</span>
+              <button onclick="handleSessionExpiredSignIn()" 
+                class="px-3 py-1 bg-white text-red-700 rounded font-bold text-xs whitespace-nowrap hover:bg-red-50">
+                Sign in again
+              </button>
+            </div>
+            ` : ''}
             <div class="max-w-5xl mx-auto px-4 py-3">
               <div class="flex items-center justify-between mb-2">
                 <div>
@@ -5794,6 +5853,24 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       }
     };
 
+    // Triggered by the "Sign in again" button in the session-expired banner.
+    // signOut() can itself throw an auth error if the refresh token is already
+    // gone — handle that case by manually clearing local state so the user lands
+    // on the login screen regardless.
+    window.handleSessionExpiredSignIn = async function() {
+      try {
+        await signOut();
+      } catch (err) {
+        console.warn('signOut threw (expected if refresh token already gone):', err);
+        // Force-clear local auth state so the login screen appears
+        currentUser = null;
+        userPreferences = {};
+        sessionExpired = false;
+        try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch (e) { /* ignore */ }
+        render();
+      }
+    };
+
     window.updateDemographics = async function(field, value) {
       patientData.demographics[field] = value;
       savePatientData();
@@ -6383,7 +6460,9 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 4000,
+            // 8000 is plenty for a 30-feature JSON with design notes and comments.
+            // 4000 was getting truncated mid-array on full-detail responses.
+            max_tokens: 8000,
             system: systemPrompt,
             messages: [{ role: 'user', content: userMessage }]
           })
@@ -6423,7 +6502,21 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       } catch (err) {
         console.error('AI processing error:', err);
         aiBuilderState.step = 'paste';
-        aiBuilderState.errorMessage = `AI processing failed: ${err.message}. You can try "Manual mode" instead.`;
+        // JSON parse errors that mention array elements or unexpected end usually
+        // mean the response got truncated mid-output. Tell the user something
+        // actionable rather than just the raw parser message.
+        const m = (err.message || '').toLowerCase();
+        const looksTruncated = m.includes('after array element') ||
+                                m.includes('unexpected end') ||
+                                m.includes('expected') && m.includes('json');
+        if (looksTruncated) {
+          aiBuilderState.errorMessage =
+            `AI response was cut off before finishing the JSON. ` +
+            `This usually means the response was too long. Try again — sometimes a fresh ` +
+            `attempt produces a shorter output. If it keeps failing, use "Manual mode" instead.`;
+        } else {
+          aiBuilderState.errorMessage = `AI processing failed: ${err.message}. You can try "Manual mode" instead.`;
+        }
         render();
       }
     };
@@ -7905,10 +7998,14 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         console.log('Customizations saved successfully');
       } catch (error) {
         console.error('Error auto-saving customizations:', error);
-        
-        // Show specific error message
+
+        // If the session-expired banner is already up, the user already knows.
+        // Don't pile on with an alert too — that creates an alert-on-every-toggle
+        // experience while auth is broken.
+        if (sessionExpired) return;
+
+        // Show specific error message for non-auth failures
         let errorMsg = 'Warning: Failed to save changes to cloud database.\n\n';
-        
         if (error.message && error.message.includes('Session expired')) {
           errorMsg += 'Your session has expired.\n\n';
           errorMsg += '⚠️ IMPORTANT: Changes are saved locally but NOT synced to other devices.\n\n';
@@ -7920,7 +8017,6 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           errorMsg += 'Changes are saved locally but may not sync to other devices.\n\n';
           errorMsg += 'Error: ' + (error.message || 'Unknown error');
         }
-        
         alert(errorMsg);
       }
     }
