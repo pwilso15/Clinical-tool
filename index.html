@@ -3226,17 +3226,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       }
     }
 
-    // Section ordering for HOPC prose. Features tagged with these reportSection
-    // values render in this order. Any feature without a reportSection (or with
-    // a value not listed here) falls into the "_other" bucket at the end.
-    const HOPC_SECTION_ORDER = [
-      'pain_character',
-      'triggers',
-      'associated_symptoms',
-      'risk_factors',
-      '_other'
-    ];
-
     // Build a single telegraphic sentence/phrase for a group of features.
     // Positives are listed plainly; negatives are prefixed with "No ".
     // Examples:
@@ -3266,8 +3255,12 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
       const mentionedItems = new Set(); // For deduplication against ROS
 
-      // Group history features by reportSection
-      const groups = {}; // { sectionKey: { positives: [], negatives: [] } }
+      // Group history features by reportSection. Sections are discovered from the
+      // data — whatever reportSection values the AI used, we honour. They render
+      // in the order they first appear in the feature array, so the AI controls
+      // narrative flow by ordering the features it generates.
+      const groups = {};                  // { sectionKey: { positives: [], negatives: [] } }
+      const sectionOrder = [];            // first-appearance order of section keys
 
       const allFeatures = getCustomizedFeatures(presentation);
 
@@ -3281,11 +3274,12 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         // Track for ROS dedup
         mentionedItems.add(rendered.text);
 
-        // Bucket into the right section
-        const sectionKey = (feature.reportSection && HOPC_SECTION_ORDER.includes(feature.reportSection))
-          ? feature.reportSection
-          : '_other';
-        if (!groups[sectionKey]) groups[sectionKey] = { positives: [], negatives: [] };
+        // Bucket into the section the AI chose (or "_other" if untagged).
+        const sectionKey = feature.reportSection || '_other';
+        if (!groups[sectionKey]) {
+          groups[sectionKey] = { positives: [], negatives: [] };
+          sectionOrder.push(sectionKey);
+        }
         if (rendered.polarity === 'positive') {
           groups[sectionKey].positives.push(rendered.text);
         } else {
@@ -3293,9 +3287,16 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         }
       });
 
-      // Emit groups in the canonical order, skipping empty ones
+      // Emit each group on its own line, preserving the order they first
+      // appeared in the feature array. "_other" goes last as a catch-all if it
+      // exists alongside named sections.
+      const namedSections = sectionOrder.filter(s => s !== '_other');
+      const finalOrder = groups['_other']
+        ? [...namedSections, '_other']
+        : namedSections;
+
       const sentences = [];
-      HOPC_SECTION_ORDER.forEach(sectionKey => {
+      finalOrder.forEach(sectionKey => {
         const group = groups[sectionKey];
         if (!group) return;
         const sentence = buildSectionSentence(group.positives, group.negatives);
@@ -3303,7 +3304,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       });
 
       return {
-        text: sentences.length > 0 ? sentences.join(' ') : null,
+        // Newline between sections instead of a single space, so each section
+        // sits on its own line in the report.
+        text: sentences.length > 0 ? sentences.join('\n') : null,
         mentioned: mentionedItems
       };
     }
@@ -3487,7 +3490,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         }
       });
 
-      return sentences.length > 0 ? sentences.join(' ') : null;
+      // Newline between exam systems so each (Cardiovascular, Respiratory, etc.)
+      // sits on its own line in the report.
+      return sentences.length > 0 ? sentences.join('\n') : null;
     }
 
     // ============================================================================
@@ -6307,7 +6312,7 @@ So your label text MUST be:
   "buttonType": "tertiary" | "binary" | "severity" | "duration" | "pain-scale",
   "redFlag": true | false,
   "comment": "optional brief evidence note (≤120 chars) shown on hover",
-  "reportSection": "pain_character" | "associated_symptoms" | "risk_factors" | "triggers",
+  "reportSection": "snake_case_section_name (you choose — see rule 2)",
   "examSystem": "General" | "Cardiovascular" | "Respiratory" | "Abdominal" | "Neurological" | "Musculoskeletal"
 }
 \`\`\`
@@ -6316,18 +6321,31 @@ So your label text MUST be:
 
 ## Editorial rules
 
-1. **Order matters.** Within each \`type\`, order features in the natural order a doctor describes them in a note (onset → character → radiation → associated symptoms → modifying factors → risk factors). The engine emits features in array order.
+1. **Order matters.** Within each \`type\`, order features in the natural order a doctor describes them in a note. The engine emits features in array order, and uses first-appearance order to decide what goes on each line of the report. Put features in the order a clinician would actually narrate them.
 
-2. **Group History features by reportSection — this is critical for readable output.** Features with the same \`reportSection\` render as a single telegraphic sentence in the HOPC. Use the four allowed values:
-   - \`pain_character\` — quality, location, radiation, severity, onset pattern
-   - \`triggers\` — what brings it on or worsens it (exertion, food, position, time of day)
-   - \`associated_symptoms\` — concurrent features (dyspnoea, nausea, diaphoresis, etc.)
-   - \`risk_factors\` — predisposing history (smoking, family history, comorbidities)
+2. **Group History features by reportSection — this drives the layout of the HOPC.** Features sharing the same \`reportSection\` render as a single line in the HOPC. Different reportSection values render as separate lines. **Choose section names that fit the presentation** — don't force every presentation into the same template. Use snake_case identifiers that describe what the line is about.
 
-   The output looks like: "Pain radiates to left arm. Triggered by exertion. Associated dyspnoea and diaphoresis. No nausea, syncope, or palpitations. Smoker, hypertensive."
-   Each section is one short sentence. Plan your features so they cluster cleanly into these four groups.
+   For pain-led presentations (chest pain, abdominal pain, headache), typical sections are:
+   - \`pain_character\`, \`triggers\`, \`associated_symptoms\`, \`risk_factors\`
 
-3. **Tag Examination features with examSystem so they render under the right body system.** Use the system that matches where a doctor would document the finding, not where the symptom presents:
+   For non-pain presentations, choose sections that match the clinical narrative. Examples:
+   - **Heart failure**: \`symptom_onset\`, \`volume_status\`, \`functional_impact\`, \`precipitants\`, \`comorbid_symptoms\`, \`risk_factors\`
+   - **Syncope**: \`event_circumstances\`, \`prodrome\`, \`recovery\`, \`witnessed_features\`, \`risk_factors\`
+   - **Dyspnoea**: \`onset_pattern\`, \`exertional_features\`, \`associated_symptoms\`, \`triggers\`, \`risk_factors\`
+   - **Cognitive decline**: \`cognitive_features\`, \`functional_impact\`, \`behavioural_features\`, \`risk_factors\`
+
+   Aim for 3–6 sections per presentation. Each should produce ONE coherent line in the report. Test each section by asking: "if all features in this group are toggled on, does the resulting sentence read like one thing a clinician would say in one breath?"
+
+   Worked example — Heart Failure with these reportSection values:
+   - symptom_onset: "Symptoms developing over 2 weeks"
+   - volume_status: "Orthopnoea, paroxysmal nocturnal dyspnoea, peripheral oedema; no bendopnea"
+   - functional_impact: "NYHA class III; no rest dyspnoea"
+   - precipitants: "No medication non-adherence, dietary indiscretion, or NSAID use"
+   - risk_factors: "No cardiotoxic exposure or family history of cardiomyopathy"
+
+   Each section gets its own line. Together they read like a structured registrar note.
+
+3. **Tag Examination features with examSystem so they render under the right body system.** Each examSystem renders as its own line. Use the system that matches where a doctor would document the finding, not where the symptom presents:
    - \`General\` — appearance, vital signs, hydration, alertness
    - \`Cardiovascular\` — pulses, JVP, heart sounds, peripheral oedema, perfusion
    - \`Respiratory\` — chest signs, work of breathing, oxygenation
