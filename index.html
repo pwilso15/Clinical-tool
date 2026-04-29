@@ -2850,15 +2850,31 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         throw err;
       }
 
+      // Wrap the Supabase request in a 15-second timeout. Without this, if the
+      // request hangs (e.g. dead refresh token, network blip, Supabase outage),
+      // the UI freezes forever waiting for a Promise that never resolves.
+      const SAVE_TIMEOUT_MS = 15000;
+      const upsertPromise = supabaseClient
+        .from('user_configs')
+        .upsert({
+          user_id: currentUser.id,
+          config_data: prefs
+        }, {
+          onConflict: 'user_id'
+        });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(
+            `Save timed out after ${SAVE_TIMEOUT_MS / 1000} seconds. ` +
+            'Possible causes: expired session, network issue, or Supabase outage. ' +
+            'Try signing out and back in.'
+          ));
+        }, SAVE_TIMEOUT_MS);
+      });
+
       try {
-        const { error } = await supabaseClient
-          .from('user_configs')
-          .upsert({
-            user_id: currentUser.id,
-            config_data: prefs
-          }, {
-            onConflict: 'user_id'
-          });
+        const { error } = await Promise.race([upsertPromise, timeoutPromise]);
 
         if (error) {
           console.error('Error saving preferences:', error);
@@ -2880,8 +2896,11 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
       } catch (error) {
         console.error('Failed to save preferences:', error);
-        // If the error is auth-flavoured even when not flagged above, raise the banner.
-        if (isAuthError(error) && !sessionExpired) {
+        // Treat timeouts as a likely auth issue too — they often indicate a stuck
+        // refresh attempt — so raise the banner and prompt re-login.
+        const looksLikeAuth = isAuthError(error) ||
+          (error.message && error.message.includes('timed out'));
+        if (looksLikeAuth && !sessionExpired) {
           sessionExpired = true;
           render();
         }
@@ -6485,6 +6504,13 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           throw new Error('Unexpected response format from Claude');
         }
 
+        // Stash on window for post-mortem debugging from the console.
+        // If parsing fails, you can run `window.lastAIText` in DevTools to inspect.
+        window.lastAIText = aiText;
+        window.lastAIRawResponse = data;
+        console.log('AI response length:', aiText.length, 'chars');
+        console.log('AI response stop_reason:', data.stop_reason || '(unknown)');
+
         // Parse the JSON (allow for code fences just in case)
         const jsonText = extractJsonFromText(aiText);
         const parsed = JSON.parse(jsonText);
@@ -7981,12 +8007,22 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
     };
 
     window.saveCustomizations = async function() {
+      console.log('saveCustomizations called');
       try {
+        console.log('Attempting to save user preferences...');
         await saveUserPreferences(userPreferences);
+        console.log('Save succeeded, showing alert');
         alert('Customizations saved successfully!');
-        closeConfigureModal();
+        // closeConfigureModal triggers a render — wrap it so any render error
+        // doesn't hide the fact that the save worked.
+        try {
+          closeConfigureModal();
+        } catch (closeErr) {
+          console.error('Error closing modal after save:', closeErr);
+        }
       } catch (error) {
-        alert('Error saving customizations: ' + error.message);
+        console.error('saveCustomizations error:', error);
+        alert('Error saving customizations: ' + (error.message || error || 'Unknown error'));
       }
     };
 
