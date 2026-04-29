@@ -2403,12 +2403,41 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     }
 
     async function signOut() {
-      const { error } = await supabaseClient.auth.signOut();
-      if (error) throw error;
+      // Strategy: do the local sign-out first (synchronous-ish, doesn't hit
+      // the network), then best-effort server-side cleanup with a short
+      // timeout. The user wants to reach the login screen — we shouldn't
+      // block them on a network call that might hang because their refresh
+      // token is dead.
+
+      // 1. Local sign-out: clears the supabase-js in-memory + localStorage tokens.
+      //    This is fast (no network) and is what actually controls whether the
+      //    UI shows the login screen.
+      try {
+        await supabaseClient.auth.signOut({ scope: 'local' });
+      } catch (err) {
+        console.warn('Local signOut failed (will clear state anyway):', err);
+      }
+
+      // 2. Wipe app state and re-render BEFORE the server call. This is the
+      //    visible part — the user sees the login screen immediately.
       currentUser = null;
       userPreferences = {};
-      // Note: patient data stays in localStorage until manually cleared or auto-cleared at midnight
+      sessionExpired = false;
       render();
+
+      // 3. Best-effort server cleanup. If this hangs or fails, we don't care —
+      //    the user is already signed out from their perspective.
+      const SERVER_SIGNOUT_TIMEOUT_MS = 5000;
+      try {
+        await Promise.race([
+          supabaseClient.auth.signOut({ scope: 'global' }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Server sign-out timed out')), SERVER_SIGNOUT_TIMEOUT_MS)
+          )
+        ]);
+      } catch (err) {
+        console.warn('Server-side signOut failed or timed out (harmless):', err);
+      }
     }
 
     async function resetPassword(email) {
@@ -5878,21 +5907,10 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     };
 
     // Triggered by the "Sign in again" button in the session-expired banner.
-    // signOut() can itself throw an auth error if the refresh token is already
-    // gone — handle that case by manually clearing local state so the user lands
-    // on the login screen regardless.
+    // signOut() now handles all the failure cases internally and always lands
+    // the user on the login screen.
     window.handleSessionExpiredSignIn = async function() {
-      try {
-        await signOut();
-      } catch (err) {
-        console.warn('signOut threw (expected if refresh token already gone):', err);
-        // Force-clear local auth state so the login screen appears
-        currentUser = null;
-        userPreferences = {};
-        sessionExpired = false;
-        try { await supabaseClient.auth.signOut({ scope: 'local' }); } catch (e) { /* ignore */ }
-        render();
-      }
+      await signOut();
     };
 
     window.updateDemographics = async function(field, value) {
