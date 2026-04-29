@@ -6492,7 +6492,7 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       }
     };
 
-    window.importGeneratedJson = function(replaceAll) {
+    window.importGeneratedJson = async function(replaceAll) {
       // Re-parse from textarea in case the user edited
       let parsed;
       try {
@@ -6576,10 +6576,33 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           });
         }
       }
-      
-      saveCustomizationsSilent();
-      closeAIBuilderModal();
-      alert(`✓ Imported ${cleanFeatures.length} features for "${presentation}".\n\nOpen the presentation tab to review them.`);
+
+      // Show "saving" state while we wait for the database write
+      aiBuilderState.errorMessage = '';
+      aiBuilderState.processing = true;
+      render();
+
+      // Actually wait for the save to finish. Without await, on iPhone the modal
+      // closing can interrupt the in-flight Supabase request and the data gets
+      // saved locally only — it won't sync across devices.
+      try {
+        await saveUserPreferences(userPreferences);
+        aiBuilderState.processing = false;
+        closeAIBuilderModal();
+        alert(`✓ Imported ${cleanFeatures.length} features for "${presentation}" and synced to cloud.\n\nOpen the presentation tab to review them.`);
+      } catch (err) {
+        aiBuilderState.processing = false;
+        // The data is in userPreferences locally but didn't sync. Be honest about that.
+        let msg = `Imported ${cleanFeatures.length} features locally, but failed to sync to cloud:\n\n${err.message || err}\n\n`;
+        if (err.message && err.message.includes('Session expired')) {
+          msg += 'Your session has expired. Sign out and sign in again, then re-import.';
+        } else {
+          msg += 'Your changes are saved on this device but won\'t appear on other devices until sync succeeds.';
+        }
+        aiBuilderState.errorMessage = msg;
+        render();
+        alert(msg);
+      }
     };
 
     window.copyOEQuery = function() {
