@@ -2491,11 +2491,26 @@ What rare or uncommon diagnoses should be considered in the differential for thi
             customFeatures: []
           };
         } else {
-          // Existing presentation - merge new features from MASTER_FEATURES
+          // Existing presentation. Only auto-merge new master features in if the
+          // user has NOT customised this presentation via AI Builder / Replace All.
+          // We detect customisation by checking if every master feature key is
+          // still present. If even one is missing, the user has explicitly
+          // replaced their data — adding things back would be wrong (it was
+          // exactly this re-injection bug that ghosted the original 12 Heart
+          // Failure features back into the UI on every page load).
           const existing = userPreferences.customizations.presentations[presentation];
-          const existingKeys = new Set(existing.features.map(f => f.key));
-          
-          // Find features in MASTER_FEATURES that don't exist in user customizations
+          const existingKeys = new Set((existing.features || []).map(f => f.key));
+          const masterKeys = MASTER_FEATURES[presentation].map(f => f.key);
+          const allMasterKeysPresent = masterKeys.every(k => existingKeys.has(k));
+
+          if (!allMasterKeysPresent) {
+            // User has customised — leave their data alone.
+            return;
+          }
+
+          // User still has the default keys. Safe to add NEW master features
+          // (this is the legitimate use case: code updates that introduce new
+          // entries should appear for users who haven't customised).
           const newFeatures = MASTER_FEATURES[presentation]
             .filter(masterFeature => !existingKeys.has(masterFeature.key))
             .map(f => ({
@@ -2503,8 +2518,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
               visible: true,
               redFlag: f.redFlag || false
             }));
-          
-          // Add new features to the end
+
           if (newFeatures.length > 0) {
             existing.features.push(...newFeatures);
             console.log(`Added ${newFeatures.length} new features to ${presentation}`);
