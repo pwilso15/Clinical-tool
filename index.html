@@ -2282,7 +2282,16 @@
       manualPromptText: '',      // The prompt to copy to Claude.ai (fallback mode)
       manualResponseText: '',    // What user pastes back from Claude.ai
       errorMessage: '',          // Any error to show
-      processing: false
+      processing: false,
+      // --- Tested build mode (iterative QA pipeline) ---
+      buildMode: 'quick',        // 'quick' | 'tested'
+      caseArchetypes: '',        // User-suggested archetypes (optional, freeform)
+      // Tested-build progress state
+      testedStage: null,         // Current pipeline stage label, shown to user
+      testedProgress: [],        // Array of completed stages (each {label, status, detail})
+      testedCases: null,         // The 5 generated case studies
+      testedChangeLog: null,     // Summary of how checklist evolved
+      testedIteration: 0         // Current revision iteration (0=v1, 1=v2, 2=v3)
     };
     // Local aliases for convenience inside the module
     let aiBuilderModalOpen = window.aiBuilderModalOpen;
@@ -5746,8 +5755,51 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                         id="ai-builder-oe-text"
                         oninput="aiBuilderState.oeReviewText = this.value"
                         class="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                        rows="14"
+                        rows="12"
                         placeholder="Paste the full OpenEvidence response here, including any references and citations...">${aiBuilderState.oeReviewText}</textarea>
+                    </div>
+
+                    <!-- Build mode selector -->
+                    <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
+                      <p class="text-sm font-semibold text-gray-800">Build mode:</p>
+                      <div class="space-y-2">
+                        <label class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white">
+                          <input type="radio" name="build-mode" value="quick" 
+                            ${aiBuilderState.buildMode === 'quick' ? 'checked' : ''}
+                            onchange="aiBuilderState.buildMode='quick'; render();"
+                            class="mt-0.5">
+                          <div class="flex-1 text-sm">
+                            <span class="font-medium">⚡ Quick build</span>
+                            <span class="text-xs text-gray-500">— ~20s, single pass</span>
+                            <p class="text-xs text-gray-600 mt-0.5">AI generates a checklist directly from the OE review.</p>
+                          </div>
+                        </label>
+                        <label class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white border border-purple-200 bg-purple-50">
+                          <input type="radio" name="build-mode" value="tested" 
+                            ${aiBuilderState.buildMode === 'tested' ? 'checked' : ''}
+                            onchange="aiBuilderState.buildMode='tested'; render();"
+                            class="mt-0.5">
+                          <div class="flex-1 text-sm">
+                            <span class="font-medium">🧪 Tested build</span>
+                            <span class="text-xs text-amber-700 font-semibold ml-1">(coming soon)</span>
+                            <span class="text-xs text-gray-500">— ~60–90s, iterative</span>
+                            <p class="text-xs text-gray-600 mt-0.5">AI generates checklist, creates 5 case studies, tests checklist against each, revises to fill gaps. Up to 2 revisions.</p>
+                          </div>
+                        </label>
+                      </div>
+
+                      ${aiBuilderState.buildMode === 'tested' ? `
+                      <div class="pt-2 border-t border-gray-200">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Case archetypes (optional):</label>
+                        <textarea 
+                          id="ai-builder-archetypes"
+                          oninput="aiBuilderState.caseArchetypes = this.value"
+                          class="w-full px-3 py-2 border rounded text-sm"
+                          rows="2"
+                          placeholder="e.g. classic decompensation, cardiogenic shock, HFpEF atypical, iatrogenic, right-sided. Leave blank to let the AI choose.">${aiBuilderState.caseArchetypes}</textarea>
+                        <p class="text-xs text-gray-500 mt-1">Comma-separated list of case categories you want tested. Helps target diverse scenarios.</p>
+                      </div>
+                      ` : ''}
                     </div>
 
                     ${aiBuilderState.errorMessage ? `
@@ -5757,9 +5809,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                     ` : ''}
 
                     <div class="flex gap-2">
-                      <button onclick="processWithAI()" 
+                      <button onclick="${aiBuilderState.buildMode === 'tested' ? 'processTestedBuild()' : 'processWithAI()'}" 
                         class="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold">
-                        🤖 Process with AI (auto)
+                        ${aiBuilderState.buildMode === 'tested' ? '🧪 Run Tested Build' : '🤖 Process with AI (auto)'}
                       </button>
                       <button onclick="switchToManualPaste()" 
                         class="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm"
@@ -5771,10 +5823,33 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   ` : ''}
 
                   ${aiBuilderState.step === 'processing' ? `
-                  <div class="py-12 text-center">
-                    <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-purple-200 border-t-purple-600 mb-4"></div>
-                    <p class="text-gray-700 font-medium">Claude is reviewing the OE response and designing your checklist...</p>
-                    <p class="text-xs text-gray-500 mt-2">This usually takes 20–40 seconds.</p>
+                  <div class="py-8">
+                    ${aiBuilderState.buildMode === 'tested' ? `
+                    <div class="space-y-3">
+                      <div class="text-center mb-4">
+                        <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-purple-200 border-t-purple-600 mb-3"></div>
+                        <p class="text-gray-800 font-semibold">${aiBuilderState.testedStage || 'Starting tested build...'}</p>
+                        <p class="text-xs text-gray-500 mt-1">This takes 60–90 seconds across multiple AI calls.</p>
+                      </div>
+                      <div class="bg-gray-50 rounded-lg p-3 space-y-1.5 text-sm">
+                        ${aiBuilderState.testedProgress.map(p => `
+                          <div class="flex items-start gap-2">
+                            <span class="${p.status === 'done' ? 'text-green-600' : p.status === 'error' ? 'text-red-600' : 'text-gray-400'}">${p.status === 'done' ? '✓' : p.status === 'error' ? '✗' : '•'}</span>
+                            <div class="flex-1">
+                              <div class="font-medium">${p.label}</div>
+                              ${p.detail ? `<div class="text-xs text-gray-600">${p.detail}</div>` : ''}
+                            </div>
+                          </div>
+                        `).join('')}
+                      </div>
+                    </div>
+                    ` : `
+                    <div class="text-center">
+                      <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-purple-200 border-t-purple-600 mb-4"></div>
+                      <p class="text-gray-700 font-medium">Claude is reviewing the OE response and designing your checklist...</p>
+                      <p class="text-xs text-gray-500 mt-2">This usually takes 20–40 seconds.</p>
+                    </div>
+                    `}
                   </div>
                   ` : ''}
 
@@ -6463,14 +6538,47 @@ So your label text MUST be:
    - \`pain-scale\`: 0–10. Use ONLY for actual pain assessment.
    - **Default to tertiary unless there is a clear reason.** Don't proliferate button types.
 
-5. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+   **For severity / duration / pain-scale buttons** — the \`unsafe\` label must be the **finding itself**, not a meta-description. The renderer adds the qualifier in parentheses:
+   - ✓ \`unsafe: "headache"\` → renders as "headache (7/10)"
+   - ✗ \`unsafe: "pain severity"\` → renders as "pain severity (7/10)" — meta-description, reads wrong
+   - ✓ \`unsafe: "joint pain"\` → renders as "joint pain (moderate)"
+   - ✗ \`unsafe: "pain level"\` — never use the words "severity", "level", or "rating" in unsafe labels for these button types
+   For these button types, set \`safe: "None"\`.
 
-6. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
+5. **POLARITY CONVENTION — critical for safe report generation.**
+
+   Each feature has a \`safe\` label (the absence/normal state) and an \`unsafe\` label (the abnormal finding). The renderer uses these to produce reassuring negatives ("No chest pain") and positive findings ("Chest pain") in the report. **Wrong labels cause clinically unsafe inverted reports.**
+
+   **Hard rules — these will be auto-rejected by the validator:**
+   - \`safe\` and \`unsafe\` MUST NOT be identical
+   - \`unsafe\` MUST NOT start with "no" (positive findings should not be negated)
+   - Both \`safe\` and \`unsafe\` MUST NOT start with "no" (almost always indicates swap)
+
+   **Strong convention — prefer "no X" form for safe labels:**
+   - ✓ \`safe: "no chest pain"\`, \`unsafe: "chest pain"\`
+   - ✓ \`safe: "no rapid weight gain"\`, \`unsafe: "rapid weight gain"\`
+   - ✓ \`safe: "no medication non-adherence"\`, \`unsafe: "medication non-adherence"\`
+   - ✗ \`safe: "weight stable"\`, \`unsafe: "weight gain"\` — positive description of normal state; reframe as "no rapid weight gain" / "rapid weight gain"
+   - ✗ \`safe: "good medication adherence"\`, \`unsafe: "non-adherence"\` — reframe as "no medication non-adherence" / "medication non-adherence"
+
+   **Allowed exceptions — conventional positive shorthand** (these read cleanly and are accepted by the validator):
+   - "afebrile" / "febrile"
+   - "normotensive" / "hypotensive"
+   - "GCS 15" / "GCS reduced"
+   - "alert and oriented" / "confused"
+   - "warm and well perfused" / "cool peripheries"
+   - "lungs clear" / "crepitations present"
+   - "full active range of motion" / "restricted range of motion"
+   - "rapid recovery to baseline" / "prolonged recovery"
+
+6. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+
+7. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
    - Is captured by a more general item already
    - Is rarely diagnostically useful
    - Is more appropriately a free-text field than a button
 
-7. **Phrasing test — apply to every label.** The HOPC renders telegraphically — short clipped sentences, doctor-style. Read your sentence aloud:
+8. **Phrasing test — apply to every label.** The HOPC renders telegraphically — short clipped sentences, doctor-style. Read your sentence aloud:
    - Within a reportSection group, positives become "<unsafe1>, <unsafe2>, and <unsafe3>"; negatives become "no <unsafe1>, <unsafe2>, or <unsafe3>"
    - Worked example for pain_character group: "Pain radiates to left arm, sharp in quality, with sudden onset."
    - Worked example for negatives in associated_symptoms: "No nausea, syncope, or palpitations."
@@ -6549,7 +6657,14 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         manualPromptText: '',
         manualResponseText: '',
         errorMessage: '',
-        processing: false
+        processing: false,
+        buildMode: 'quick',
+        caseArchetypes: '',
+        testedStage: null,
+        testedProgress: [],
+        testedCases: null,
+        testedChangeLog: null,
+        testedIteration: 0
       });
       render();
     };
@@ -6566,6 +6681,23 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         alert('Completeness prompt copied to clipboard.\n\nNow paste it into OpenEvidence.');
       } else {
         alert('Copy failed — please manually select the text.');
+      }
+    };
+
+    // Placeholder for the tested-build pipeline (Phase B work).
+    // Wired up so the button in the UI doesn't reference an undefined function;
+    // when the user clicks it, they get a clear "coming soon" message and the
+    // option to fall back to quick build.
+    window.processTestedBuild = async function() {
+      const proceed = confirm(
+        '🧪 Tested Build is not yet active.\n\n' +
+        'This mode will run an iterative pipeline: generate checklist → generate 5 case studies → critique → revise → finalize. ' +
+        'Implementation is in progress.\n\n' +
+        'Would you like to use Quick Build instead for now?'
+      );
+      if (proceed) {
+        aiBuilderState.buildMode = 'quick';
+        await window.processWithAI();
       }
     };
 
@@ -6729,6 +6861,87 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       }
     };
 
+    // ============================================================================
+    // AI BUILDER VALIDATION
+    // Catches AI-generated feature sets with dangerous problems (polarity
+    // swaps, identical labels, invalid section/system names, etc.) before
+    // they can land in the user's data.
+    // ============================================================================
+    const AI_VALID_EXAM_SYSTEMS = ['General', 'Cardiovascular', 'Respiratory', 'Abdominal', 'Neurological', 'Musculoskeletal'];
+    const AI_CONVENTIONAL_POSITIVE_SHORTHAND = [
+      /^GCS\s*\d+/, /^afebrile$/i, /^normotensive$/i,
+      /^full\s+(active|passive)?\s*range/i, /^full\s+ROM$/i,
+      /^alert\s+and\s+oriented/i, /^warm\s+and\s+(well\s+)?perfused/i,
+      /^lungs\s+clear/i, /^heart\s+rate\s+normal$/i,
+      /^pulse\s+pressure\s+normal$/i, /^rapid\s+recovery/i
+    ];
+
+    function validateAIFeatureSet(features) {
+      const errors = [];
+      const warnings = [];
+      if (!Array.isArray(features) || features.length === 0) {
+        errors.push('No features generated.');
+        return { errors, warnings };
+      }
+      features.forEach((f, i) => {
+        const where = `Feature ${i + 1} (${f.key || '<no key>'})`;
+        if (!f.key) errors.push(`${where}: missing key.`);
+        if (!f.safe) errors.push(`${where}: missing safe label.`);
+        if (!f.unsafe) errors.push(`${where}: missing unsafe label.`);
+        if (!f.type) errors.push(`${where}: missing type.`);
+        if (!f.safe || !f.unsafe) return;
+        if (f.safe.trim().toLowerCase() === f.unsafe.trim().toLowerCase()) {
+          errors.push(`${where}: safe and unsafe are identical ("${f.safe}").`);
+        }
+        if (/^no\s+/i.test(f.safe) && /^no\s+/i.test(f.unsafe)) {
+          errors.push(`${where}: both safe and unsafe start with "no" — labels are likely swapped.`);
+        }
+        if (/^no\s+/i.test(f.unsafe) && !/^no\s+/i.test(f.safe)) {
+          errors.push(`${where}: unsafe starts with "no" — likely swapped with safe.`);
+        }
+        const isShorthand = AI_CONVENTIONAL_POSITIVE_SHORTHAND.some(re => re.test(f.safe));
+        if (!/^no\s+/i.test(f.safe) && !/^absent/i.test(f.safe) && !/^absence/i.test(f.safe) && !isShorthand) {
+          if (!['none', 'normal'].some(allowed => f.safe.toLowerCase().startsWith(allowed))) {
+            warnings.push(`${where}: safe label "${f.safe}" is a positive description. Prefer "no X" form for cleaner prose.`);
+          }
+        }
+        if (['severity', 'pain-scale', 'duration'].includes(f.buttonType)) {
+          if (/\bseverity\b|\blevel\b|\brating\b/i.test(f.unsafe)) {
+            warnings.push(`${where}: unsafe label "${f.unsafe}" contains a meta-word. For ${f.buttonType} buttons the label should be the finding itself (e.g. "headache" not "headache severity").`);
+          }
+        }
+        if (f.safe.length > 60) warnings.push(`${where}: safe label is ${f.safe.length} chars — consider splitting.`);
+        if (f.unsafe.length > 60) warnings.push(`${where}: unsafe label is ${f.unsafe.length} chars — consider splitting.`);
+        if (!['History', 'Examination', 'Investigation', 'Differential'].includes(f.type)) {
+          errors.push(`${where}: type "${f.type}" is not valid.`);
+        }
+        if (f.type === 'History') {
+          if (f.reportSection && !/^[a-z][a-z0-9_]*$/.test(f.reportSection)) {
+            errors.push(`${where}: reportSection "${f.reportSection}" must be snake_case.`);
+          }
+          if (!f.reportSection) {
+            warnings.push(`${where}: History feature has no reportSection — will fall into "_other" bucket.`);
+          }
+        } else if (f.reportSection) {
+          warnings.push(`${where}: reportSection should only be set on History features.`);
+        }
+        if (f.type === 'Examination') {
+          if (f.examSystem && !AI_VALID_EXAM_SYSTEMS.includes(f.examSystem)) {
+            errors.push(`${where}: examSystem "${f.examSystem}" is not in the allowed list (${AI_VALID_EXAM_SYSTEMS.join(', ')}).`);
+          }
+          if (!f.examSystem) {
+            warnings.push(`${where}: Examination feature has no examSystem — will fall into "Presentation-specific" bucket.`);
+          }
+        } else if (f.examSystem) {
+          warnings.push(`${where}: examSystem should only be set on Examination features.`);
+        }
+      });
+      const keys = features.map(f => f.key).filter(Boolean);
+      const dupKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
+      if (dupKeys.length > 0) errors.push(`Duplicate keys: ${[...new Set(dupKeys)].join(', ')}.`);
+      return { errors, warnings };
+    }
+
     window.importGeneratedJson = async function(replaceAll) {
       // Re-parse from textarea in case the user edited
       let parsed;
@@ -6744,6 +6957,26 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         aiBuilderState.errorMessage = 'JSON must have a "features" array.';
         render();
         return;
+      }
+
+      // Validation: catch dangerous AI mistakes before they reach the database.
+      // Errors block import; warnings prompt the user to confirm.
+      const { errors: vErrors, warnings: vWarnings } = validateAIFeatureSet(parsed.features);
+      if (vErrors.length > 0) {
+        aiBuilderState.errorMessage =
+          `Cannot import — ${vErrors.length} blocking validation error${vErrors.length > 1 ? 's' : ''}:\n\n` +
+          vErrors.map(e => `• ${e}`).join('\n') +
+          `\n\nFix the JSON above and try again, or click "Manual mode" to enter features manually.`;
+        render();
+        return;
+      }
+      if (vWarnings.length > 0) {
+        const proceed = confirm(
+          `${vWarnings.length} validation warning${vWarnings.length > 1 ? 's' : ''} (not blocking):\n\n` +
+          vWarnings.map(w => `• ${w}`).join('\n') +
+          `\n\nProceed with import anyway?`
+        );
+        if (!proceed) return;
       }
 
       const presentation = aiBuilderState.presentation;
