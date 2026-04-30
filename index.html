@@ -3206,16 +3206,18 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
     function lowercaseFirst(str) {
       if (!str) return str;
-      
+
       // Get first word
       const firstWord = str.split(/\s+/)[0];
-      
-      // If first word is all uppercase (acronym like ECG, JVP, BP, etc.), keep it
-      // Check if it's at least 2 characters and all letters are uppercase
-      if (firstWord.length >= 2 && firstWord === firstWord.toUpperCase() && /^[A-Z]+$/.test(firstWord)) {
-        return str; // Keep original capitalization
+
+      // Preserve acronyms. Two cases:
+      //   1. Pure uppercase letters: ECG, JVP, BP, NSAID
+      //   2. Letters with embedded digits or slashes: S3, S1/S2, B12, T2DM, ICU/CCU
+      // Both are detected by: starts with capital, contains only capitals + digits + slashes.
+      if (firstWord.length >= 2 && /^[A-Z][A-Z0-9\/]*$/.test(firstWord)) {
+        return str;  // Keep original capitalisation
       }
-      
+
       // Otherwise, lowercase first character as before
       return str.charAt(0).toLowerCase() + str.slice(1);
     }
@@ -3275,20 +3277,86 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     //   positives only: "radiates to left arm with associated dyspnoea"
     //   negatives only: "no nausea, syncope, or palpitations"
     //   both: "radiates to left arm; no nausea or syncope"
+    // Build a "no X" style list for a group of safe-state findings. If items
+    // contain internal commas or "or" (e.g. "confusion or altered mental status"),
+    // we repeat "no" per item to avoid ambiguity — otherwise a list separator
+    // "or" collides with internal "or" producing prose like
+    // "no chest pain, palpitations, or confusion or altered mental status".
+    function buildNegativeList(strippedItems) {
+      if (strippedItems.length === 0) return '';
+      if (strippedItems.length === 1) return `no ${strippedItems[0]}`;
+
+      const anyComplex = strippedItems.some(item => /\bor\b|,/.test(item));
+
+      if (anyComplex) {
+        // Repeat "no" per item, joined with commas + "and" before the last one.
+        if (strippedItems.length === 2) {
+          return `no ${strippedItems[0]} and no ${strippedItems[1]}`;
+        }
+        return strippedItems.slice(0, -1).map(i => `no ${i}`).join(', ') +
+               `, and no ${strippedItems[strippedItems.length - 1]}`;
+      }
+
+      // Simple case: single "no" with comma list and "or" before last item.
+      return `no ${formatList(strippedItems, 'or')}`;
+    }
+
+    // Build a sentence/phrase for a group of features within one reportSection.
+    //
+    // The challenge: "safe" labels come in two grammatical forms:
+    //   (a) "no X" form (explicit negation): "no chest pain", "no peripheral oedema"
+    //   (b) Positive description form: "weight stable", "good medication adherence"
+    //
+    // The data model marks both as polarity:'negative' (the absence of pathology),
+    // but they are NOT interchangeable in prose. Prefixing "No " to a positive
+    // description catastrophically inverts its meaning ("No weight stable" reads
+    // as "weight is not stable"). Form (b) items therefore route to the positive
+    // observations list — they ARE positive observations, even though recorded
+    // as "the abnormal finding is absent".
+    //
+    // Produced shapes:
+    //   positives only: "Radiates to left arm and associated dyspnoea."
+    //   form-a only:    "No nausea, syncope, or palpitations."
+    //   form-b only:    "Weight stable and urine output maintained."
+    //   mixed forms:    "Weight stable. No peripheral oedema."
+    //   pos + neg:      "Symptoms of infection. No medication non-adherence."
     function buildSectionSentence(positives, negatives) {
-      const parts = [];
-      if (positives.length > 0) {
-        parts.push(formatList(positives));
+      const noForm = [];      // safe items in "no X" form (collapsible negatives)
+      const posDescForm = []; // safe items as positive descriptions
+
+      negatives.forEach(item => {
+        if (/^no\s+/i.test(item)) {
+          noForm.push(item.replace(/^no\s+/i, ''));
+        } else {
+          posDescForm.push(item);
+        }
+      });
+
+      // Positive descriptions of normal state are grammatically positive observations.
+      // Combine them with the unsafe-state positives for rendering purposes.
+      const allPositiveObservations = [...positives, ...posDescForm];
+
+      const blocks = [];
+      if (allPositiveObservations.length > 0) {
+        blocks.push(formatList(allPositiveObservations));
       }
-      if (negatives.length > 0) {
-        // Strip leading "no " from each negative since we'll add a single "No" at the front
-        const stripped = negatives.map(n => n.replace(/^no\s+/i, ''));
-        parts.push(`no ${formatList(stripped, 'or')}`);
+      if (noForm.length > 0) {
+        blocks.push(buildNegativeList(noForm));
       }
-      if (parts.length === 0) return null;
-      // Capitalise the first character of the resulting sentence.
-      const joined = parts.join('; ');
-      return joined.charAt(0).toUpperCase() + joined.slice(1) + '.';
+
+      if (blocks.length === 0) return null;
+
+      // Single block: capitalise first char, terminate with period.
+      if (blocks.length === 1) {
+        return blocks[0].charAt(0).toUpperCase() + blocks[0].slice(1) + '.';
+      }
+
+      // Two blocks: render as two sentences for readability. A period between
+      // the positive observations and the negative findings reads more cleanly
+      // than a semicolon in clinical prose.
+      const sentence1 = blocks[0].charAt(0).toUpperCase() + blocks[0].slice(1) + '.';
+      const sentence2 = blocks[1].charAt(0).toUpperCase() + blocks[1].slice(1) + '.';
+      return `${sentence1} ${sentence2}`;
     }
 
     function formatFeaturesProse(featuresData, presentation) {
