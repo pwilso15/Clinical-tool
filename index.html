@@ -5781,7 +5781,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                             class="mt-0.5">
                           <div class="flex-1 text-sm">
                             <span class="font-medium">🧪 Tested build</span>
-                            <span class="text-xs text-amber-700 font-semibold ml-1">(coming soon)</span>
                             <span class="text-xs text-gray-500">— ~60–90s, iterative</span>
                             <p class="text-xs text-gray-600 mt-0.5">AI generates checklist, creates 5 case studies, tests checklist against each, revises to fill gaps. Up to 2 revisions.</p>
                           </div>
@@ -5834,13 +5833,19 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                       <div class="bg-gray-50 rounded-lg p-3 space-y-1.5 text-sm">
                         ${aiBuilderState.testedProgress.map(p => `
                           <div class="flex items-start gap-2">
-                            <span class="${p.status === 'done' ? 'text-green-600' : p.status === 'error' ? 'text-red-600' : 'text-gray-400'}">${p.status === 'done' ? '✓' : p.status === 'error' ? '✗' : '•'}</span>
+                            <span class="${p.status === 'done' ? 'text-green-600' : p.status === 'error' ? 'text-red-600' : 'text-gray-400'}">${p.status === 'done' ? '✓' : p.status === 'error' ? '✗' : (p.status === 'running' ? '⟳' : '•')}</span>
                             <div class="flex-1">
                               <div class="font-medium">${p.label}</div>
                               ${p.detail ? `<div class="text-xs text-gray-600">${p.detail}</div>` : ''}
                             </div>
                           </div>
                         `).join('')}
+                      </div>
+                      <div class="flex justify-center pt-2">
+                        <button onclick="cancelTestedBuild()" 
+                          class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm">
+                          Cancel
+                        </button>
                       </div>
                     </div>
                     ` : `
@@ -5916,9 +5921,41 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   ${aiBuilderState.step === 'review' ? `
                   <div class="space-y-3">
                     <div class="bg-green-50 border-l-4 border-green-400 p-3 text-sm text-green-900 rounded">
-                      <p class="font-semibold">✓ AI processing complete</p>
-                      <p class="text-xs">${aiBuilderState.generatedJson?.features?.length || 0} features generated. Review and edit below before importing.</p>
+                      <p class="font-semibold">✓ AI processing complete${aiBuilderState.buildMode === 'tested' ? ` (Tested build, ${aiBuilderState.testedIteration + 1} iteration${aiBuilderState.testedIteration > 0 ? 's' : ''})` : ''}</p>
+                      <p class="text-xs">${aiBuilderState.generatedJson?.features?.length || 0} features generated. Review the structured summary and JSON below before importing.</p>
                     </div>
+
+                    <!-- Block-grouped feature summary -->
+                    ${renderFeatureSummaryBlocks(aiBuilderState.generatedJson?.features || [])}
+
+                    <!-- Test cases (Tested build only) -->
+                    ${(aiBuilderState.testedCases && aiBuilderState.testedCases.length > 0) ? `
+                    <details class="bg-blue-50 border border-blue-200 rounded p-2 text-xs">
+                      <summary class="font-semibold cursor-pointer text-blue-900">🧪 ${aiBuilderState.testedCases.length} Test Cases generated (click to view)</summary>
+                      <div class="mt-2 space-y-3">
+                        ${aiBuilderState.testedCases.map((c, i) => `
+                          <div class="bg-white p-2 rounded border border-blue-100">
+                            <p class="font-bold text-blue-900">Case ${i + 1}: ${c.title}</p>
+                            <p class="text-xs italic text-gray-600 mb-1">Archetype: ${c.archetype}</p>
+                            ${c.vignette ? `<p class="text-xs text-gray-700 mb-1">${c.vignette}</p>` : ''}
+                            ${c.expected_diagnosis ? `<p class="text-xs"><strong>Expected:</strong> ${c.expected_diagnosis}</p>` : ''}
+                          </div>
+                        `).join('')}
+                      </div>
+                    </details>
+                    ` : ''}
+
+                    <!-- Change log (Tested build only) -->
+                    ${(aiBuilderState.testedChangeLog && aiBuilderState.testedChangeLog.length > 0) ? `
+                    <details class="bg-purple-50 border border-purple-200 rounded p-2 text-xs">
+                      <summary class="font-semibold cursor-pointer text-purple-900">📋 Change log (click to view)</summary>
+                      <div class="mt-2 space-y-1 text-xs text-gray-700">
+                        ${aiBuilderState.testedChangeLog.map(entry => `
+                          <div class="bg-white p-2 rounded">${entry}</div>
+                        `).join('')}
+                      </div>
+                    </details>
+                    ` : ''}
 
                     ${aiBuilderState.generatedJson?._design_notes ? `
                     <details class="bg-gray-50 border rounded p-2 text-xs">
@@ -5927,14 +5964,16 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                     </details>
                     ` : ''}
 
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 mb-1">Generated JSON (editable):</label>
-                      <textarea 
-                        id="ai-builder-json"
-                        oninput="aiBuilderState.generatedJsonText = this.value"
-                        class="w-full px-3 py-2 border rounded-lg text-xs font-mono"
-                        rows="18">${aiBuilderState.generatedJsonText}</textarea>
-                    </div>
+                    <details class="bg-gray-50 border rounded p-2 text-xs">
+                      <summary class="font-semibold cursor-pointer text-gray-700">🔧 Raw JSON (advanced — editable)</summary>
+                      <div class="mt-2">
+                        <textarea 
+                          id="ai-builder-json"
+                          oninput="aiBuilderState.generatedJsonText = this.value"
+                          class="w-full px-3 py-2 border rounded-lg text-xs font-mono"
+                          rows="14">${aiBuilderState.generatedJsonText}</textarea>
+                      </div>
+                    </details>
 
                     ${aiBuilderState.errorMessage ? `
                     <div class="bg-red-50 border border-red-300 text-red-800 p-3 rounded text-sm">
@@ -6684,21 +6723,516 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       }
     };
 
-    // Placeholder for the tested-build pipeline (Phase B work).
-    // Wired up so the button in the UI doesn't reference an undefined function;
-    // when the user clicks it, they get a clear "coming soon" message and the
-    // option to fall back to quick build.
-    window.processTestedBuild = async function() {
-      const proceed = confirm(
-        '🧪 Tested Build is not yet active.\n\n' +
-        'This mode will run an iterative pipeline: generate checklist → generate 5 case studies → critique → revise → finalize. ' +
-        'Implementation is in progress.\n\n' +
-        'Would you like to use Quick Build instead for now?'
-      );
-      if (proceed) {
-        aiBuilderState.buildMode = 'quick';
-        await window.processWithAI();
+
+    // Module-level cancellation flag for the Tested Build pipeline.
+    // Set to true by the Cancel button mid-pipeline; each stage checks before
+    // continuing so we abort cleanly between stages rather than mid-network-call.
+    let testedBuildCancelled = false;
+
+    // Generic helper: send a system prompt + user message to Claude via the
+    // Cloudflare Worker, parse JSON from the response. Used by all stages of
+    // both Quick and Tested build modes.
+    //
+    // Throws on:
+    //   - Worker error (network, non-2xx)
+    //   - Truncation (stop_reason === 'max_tokens')
+    //   - Malformed JSON in response
+    //   - Cancellation
+    //
+    // Returns: parsed JSON object.
+    async function callClaudeForJson(systemPrompt, userMessage, { maxTokens = 8000, stageName = 'AI call' } = {}) {
+      if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+      if (!WORKER_URL) {
+        throw new Error('No worker configured. Use Manual mode instead.');
       }
+
+      const response = await fetch(`${WORKER_URL}/api/claude`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }]
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`${stageName} failed — worker returned ${response.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const data = await response.json();
+
+      let aiText = '';
+      if (data.content && Array.isArray(data.content)) {
+        aiText = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      } else if (typeof data.completion === 'string') {
+        aiText = data.completion;
+      } else {
+        throw new Error(`${stageName}: unexpected response format from Claude`);
+      }
+
+      // Stash for post-mortem debugging
+      window[`lastAIText_${stageName.replace(/\s+/g, '_')}`] = aiText;
+      window.lastAIText = aiText;
+      window.lastAIRawResponse = data;
+      console.log(`[${stageName}] response length: ${aiText.length} chars, stop_reason: ${data.stop_reason || '(unknown)'}`);
+
+      if (data.stop_reason === 'max_tokens') {
+        throw new Error(`${stageName}: response was cut off (hit max_tokens of ${maxTokens}). Try again, or report this so we can raise the limit.`);
+      }
+
+      const jsonText = extractJsonFromText(aiText);
+      try {
+        return JSON.parse(jsonText);
+      } catch (parseErr) {
+        throw new Error(`${stageName}: AI response was not valid JSON. ${parseErr.message}`);
+      }
+    }
+
+    // ============================================================================
+    // TESTED BUILD — STAGE 2: Generate 5 test cases
+    // ============================================================================
+    //
+    // Asks Claude to invent 5 diverse clinical cases for the presentation. Each
+    // case is a structured JSON object listing what a doctor would observe in
+    // that scenario — history, examination, investigations, red flags. Stage 3
+    // uses these structured findings to check what the v1 checklist captures.
+    async function generateTestCases(presentation, oeReviewText, archetypeHints) {
+      const archetypeBlock = (archetypeHints && archetypeHints.trim().length > 0)
+        ? `\n\nThe user has requested these case archetypes specifically: ${archetypeHints.trim()}\nUse these as the basis for your 5 cases (one per archetype).`
+        : `\n\nChoose 5 archetypes that exercise the presentation in clinically diverse ways. Aim for spread across:\n- A classic / typical presentation\n- A severe / red-flag-heavy presentation requiring escalation\n- An atypical or subtle presentation that's easy to miss\n- A presentation with diagnostic uncertainty (overlap with mimics)\n- A presentation in a special population (elderly, pregnant, immunocompromised, comorbid) where standard rules differ`;
+
+      const systemPrompt = `You are a senior clinical educator generating realistic case studies that will be used to stress-test a clinical assessment checklist.
+
+For the presentation "${presentation}", generate exactly 5 cases. Each case must be specific (real-feeling vital signs, demographics, symptoms, and findings — not vague). The cases will be used by another AI to identify gaps in a checklist, so each case must list concrete findings that a doctor would want to record.${archetypeBlock}
+
+Return ONLY valid JSON in this exact shape:
+\`\`\`json
+{
+  "cases": [
+    {
+      "title": "Short descriptive title",
+      "archetype": "Brief category — e.g. 'classic decompensation', 'cardiogenic shock', 'atypical HFpEF'",
+      "vignette": "One-paragraph clinical vignette (3-5 sentences). Include age, sex, presenting complaint, key history, vitals.",
+      "history_findings": [
+        "Specific history finding 1 (e.g. 'orthopnoea')",
+        "Specific history finding 2"
+      ],
+      "examination_findings": [
+        "Specific examination finding (e.g. 'JVP elevated to angle of jaw')",
+        "Specific examination finding"
+      ],
+      "investigations": [
+        "Specific investigation result (e.g. 'NT-proBNP 8500 pg/mL')"
+      ],
+      "red_flags": [
+        "Any red-flag features that mandate escalation"
+      ],
+      "expected_diagnosis": "What a competent registrar would diagnose / be most concerned about"
+    }
+  ]
+}
+\`\`\`
+
+Rules:
+- 5 cases exactly, no more, no fewer.
+- Each finding listed must be a concrete observation, not a category. ✓ "S3 gallop", "lactate 4.2 mmol/L"  ✗ "cardiac signs", "abnormal labs"
+- Findings should be telegraphic phrases, not full sentences.
+- Use plain English clinical terms; avoid abbreviations except universally recognised ones (BP, HR, JVP, S3, GCS, BMI, COPD, AF).
+- DO NOT include design notes, reasoning, or commentary outside the JSON.`;
+
+      const userMessage = `Generate 5 case studies for the presentation: ${presentation}.
+
+Source material (for clinical context, not transcription):
+
+${oeReviewText.slice(0, 4000)}`;
+
+      const result = await callClaudeForJson(systemPrompt, userMessage, {
+        maxTokens: 6000,
+        stageName: 'Generate cases'
+      });
+
+      if (!result.cases || !Array.isArray(result.cases) || result.cases.length === 0) {
+        throw new Error('Case generation: response missing "cases" array');
+      }
+      return result.cases;
+    }
+
+    // ============================================================================
+    // TESTED BUILD — STAGE 3: Critique checklist against cases
+    // ============================================================================
+    //
+    // Walks each case through the checklist programmatically (via the AI),
+    // identifying which findings are captured by toggle features, which would
+    // need free-text comments, and which can't be recorded at all. Returns a
+    // structured critique that Stage 4 uses to revise the checklist.
+    async function critiqueChecklist(presentation, cases, checklistFeatures) {
+      const featureSummary = checklistFeatures.map((f, i) =>
+        `${i + 1}. [${f.type || '?'}] safe="${f.safe}" / unsafe="${f.unsafe}"` +
+        (f.reportSection ? ` (section: ${f.reportSection})` : '') +
+        (f.examSystem ? ` (system: ${f.examSystem})` : '') +
+        (f.redFlag ? ' [RED FLAG]' : '')
+      ).join('\n');
+
+      const caseSummary = cases.map((c, i) => {
+        const allFindings = [
+          ...(c.history_findings || []).map(f => `[Hx] ${f}`),
+          ...(c.examination_findings || []).map(f => `[Ex] ${f}`),
+          ...(c.red_flags || []).map(f => `[!] ${f}`)
+        ];
+        return `--- Case ${i + 1}: ${c.title} (${c.archetype}) ---\n${allFindings.join('\n')}`;
+      }).join('\n\n');
+
+      const systemPrompt = `You are a clinical educator critiquing a checklist for completeness against a set of test cases.
+
+For each case, classify each finding as:
+- "captured" — there's a checklist feature whose safe or unsafe label matches the finding directly
+- "partial" — there's a related feature but it can't fully capture this finding (e.g. binary feature where finding has a gradient like "trace oedema")
+- "missing" — no feature on the checklist would capture this finding
+
+Then produce an aggregate analysis:
+- "criticalGaps": findings missing across multiple cases that materially change clinical reasoning. These should be ADDED to the checklist.
+- "minorGaps": findings missing in only one case or that are nice-to-have but not safety-critical.
+- "removalCandidates": features on the checklist that NO case ever uses (likely noise / over-specified).
+- "improvements": features that exist but should be MODIFIED (e.g. binary that should be tertiary, missing severity gradient).
+
+Return ONLY valid JSON in this exact shape:
+\`\`\`json
+{
+  "perCase": [
+    {
+      "caseTitle": "...",
+      "captured": ["finding A", "finding B"],
+      "partial": [{"finding": "X", "issue": "no severity grading"}],
+      "missing": ["finding C"]
+    }
+  ],
+  "aggregate": {
+    "criticalGaps": [
+      {"description": "atrial fibrillation / rhythm assessment", "rationale": "missed in cases 3 and 4 where AF is a precipitant"}
+    ],
+    "minorGaps": [
+      {"description": "diaphoresis", "rationale": "shock indicator in case 2"}
+    ],
+    "removalCandidates": [
+      {"featureKey": "...", "rationale": "no case uses this"}
+    ],
+    "improvements": [
+      {"featureKey": "...", "rationale": "should be tertiary not binary to capture both hypotension and hypertension"}
+    ]
+  },
+  "summary": "One-paragraph human-readable summary of the main takeaways."
+}
+\`\`\`
+
+Rules:
+- Be specific in rationales — name which case(s) revealed each gap.
+- Don't invent gaps that aren't in the cases. Only flag findings present in the cases above.
+- Don't recommend more than 5 critical gaps total — focus on the highest-impact additions.
+- DO NOT include commentary outside the JSON.`;
+
+      const userMessage = `Presentation: ${presentation}
+
+CHECKLIST FEATURES:
+${featureSummary}
+
+CASES:
+${caseSummary}
+
+Critique the checklist. Identify gaps, redundancies, and improvements.`;
+
+      return await callClaudeForJson(systemPrompt, userMessage, {
+        maxTokens: 5000,
+        stageName: 'Critique'
+      });
+    }
+
+    // ============================================================================
+    // TESTED BUILD — STAGE 4: Revise checklist based on critique
+    // ============================================================================
+    //
+    // Takes v1 checklist + critique, asks AI to produce v2. The same hard rules
+    // from the AI Builder system prompt apply — polarity convention, snake_case
+    // sections, valid examSystems, etc.
+    async function reviseChecklist(presentation, currentChecklist, critique, oeReviewText) {
+      const baseSystemPrompt = buildAIBuilderSystemPrompt();
+      // Append the revision-specific guidance.
+      const systemPrompt = baseSystemPrompt + `
+
+# REVISION TASK
+
+You are revising an existing checklist based on a critique. The critique identifies:
+- criticalGaps: ADD features for these
+- minorGaps: optionally add features for these (only if you have spare capacity in the 25-30 feature budget)
+- removalCandidates: REMOVE these features (their keys are listed)
+- improvements: MODIFY these features (their keys are listed)
+
+Preserve all features not mentioned in the critique. Keep the existing keys and reportSection/examSystem tags consistent.
+
+Return the FULL revised feature list, not just the changes. Same JSON shape as the original checklist.`;
+
+      const critiqueText = `CRITICAL GAPS to address (must add features):
+${(critique.aggregate.criticalGaps || []).map(g => `- ${g.description}: ${g.rationale}`).join('\n') || '(none)'}
+
+MINOR GAPS (add only if useful):
+${(critique.aggregate.minorGaps || []).map(g => `- ${g.description}: ${g.rationale}`).join('\n') || '(none)'}
+
+REMOVE these features:
+${(critique.aggregate.removalCandidates || []).map(r => `- key="${r.featureKey}": ${r.rationale}`).join('\n') || '(none)'}
+
+MODIFY these features:
+${(critique.aggregate.improvements || []).map(i => `- key="${i.featureKey}": ${i.rationale}`).join('\n') || '(none)'}`;
+
+      const currentJson = JSON.stringify({ features: currentChecklist }, null, 2);
+
+      const userMessage = `Presentation: ${presentation}
+
+ORIGINAL OPENEVIDENCE REVIEW (for clinical context):
+${oeReviewText.slice(0, 3000)}
+
+CURRENT CHECKLIST:
+${currentJson}
+
+CRITIQUE:
+${critiqueText}
+
+Produce a revised checklist that addresses the critique. Return the full feature list.`;
+
+      const result = await callClaudeForJson(systemPrompt, userMessage, {
+        maxTokens: 8000,
+        stageName: 'Revise checklist'
+      });
+
+      if (!result.features || !Array.isArray(result.features)) {
+        throw new Error('Revision: response missing "features" array');
+      }
+      return result;
+    }
+
+    // Helper: are there any critical gaps left in the critique? Drives convergence.
+    function critiqueHasCriticalGaps(critique) {
+      return critique &&
+             critique.aggregate &&
+             Array.isArray(critique.aggregate.criticalGaps) &&
+             critique.aggregate.criticalGaps.length > 0;
+    }
+
+    // Helper: append a stage to the visible progress log
+    function pushTestedProgress(label, status, detail) {
+      aiBuilderState.testedProgress.push({ label, status, detail });
+      render();
+    }
+
+    function setTestedProgressLast(status, detail) {
+      const arr = aiBuilderState.testedProgress;
+      if (arr.length === 0) return;
+      arr[arr.length - 1].status = status;
+      if (detail !== undefined) arr[arr.length - 1].detail = detail;
+      render();
+    }
+
+    // ============================================================================
+    // TESTED BUILD — ORCHESTRATOR
+    // ============================================================================
+    //
+    // Runs the multi-stage pipeline:
+    //   Stage 1: Generate v1 checklist from OE review
+    //   Stage 2: Generate 5 case studies
+    //   Stage 3: Critique v1 against cases
+    //   Stage 4: If critical gaps, revise → v2; re-critique. Repeat once more max.
+    //   Stage 5: Hand off to review screen with cases + change log attached.
+    //
+    // Cancellation: each stage checks the testedBuildCancelled flag at start.
+    // Failures: any thrown error stops the pipeline; the user sees the partial
+    // result they have so far (e.g. v1 checklist if Stage 4 failed) plus an
+    // error message explaining what failed.
+    window.processTestedBuild = async function() {
+      const oeText = aiBuilderState.oeReviewText.trim();
+      if (oeText.length < 50) {
+        aiBuilderState.errorMessage = 'Please paste the full OpenEvidence response (at least a few sentences).';
+        render();
+        return;
+      }
+
+      if (!WORKER_URL) {
+        switchToManualPaste();
+        return;
+      }
+
+      // Reset pipeline state
+      testedBuildCancelled = false;
+      aiBuilderState.errorMessage = '';
+      aiBuilderState.step = 'processing';
+      aiBuilderState.buildMode = 'tested';
+      aiBuilderState.testedProgress = [];
+      aiBuilderState.testedCases = null;
+      aiBuilderState.testedChangeLog = null;
+      aiBuilderState.testedIteration = 0;
+      aiBuilderState.testedStage = 'Starting…';
+      aiBuilderState.generatedJson = null;
+      aiBuilderState.generatedJsonText = '';
+      render();
+
+      // Track changes across iterations for the user-facing change log
+      const changeLog = [];
+
+      // Helper to abort cleanly with an error showing whatever progress we have
+      const abortWith = (err) => {
+        console.error('Tested build error:', err);
+        aiBuilderState.step = 'paste';
+        aiBuilderState.errorMessage =
+          `Tested build failed: ${err.message || err}\n\n` +
+          (aiBuilderState.generatedJson
+            ? 'A partial checklist was generated and is available — switch to Quick build mode and click Process to retry, or use Manual mode.'
+            : 'No checklist was generated. Try again or switch to Quick build mode.');
+        render();
+      };
+
+      try {
+        // -----------------------------------------------------------------
+        // STAGE 1 — Generate v1 checklist
+        // -----------------------------------------------------------------
+        aiBuilderState.testedStage = 'Stage 1 of 5 — Generating initial checklist…';
+        pushTestedProgress('Generate initial checklist (v1)', 'running');
+        const currentFeatures = getCurrentFeaturesForPresentation(aiBuilderState.presentation);
+        const stage1Sys = buildAIBuilderSystemPrompt();
+        const stage1User = buildAIBuilderUserMessage(aiBuilderState.presentation, oeText, currentFeatures);
+        const v1 = await callClaudeForJson(stage1Sys, stage1User, {
+          maxTokens: 8000,
+          stageName: 'Stage 1: v1 checklist'
+        });
+        if (!v1.features || !Array.isArray(v1.features)) {
+          throw new Error('Stage 1 returned no features array');
+        }
+        setTestedProgressLast('done', `${v1.features.length} features generated`);
+
+        // Save v1 immediately as a fallback in case later stages fail
+        aiBuilderState.generatedJson = v1;
+        aiBuilderState.generatedJsonText = JSON.stringify(v1, null, 2);
+        changeLog.push(`v1: initial checklist with ${v1.features.length} features generated from OE review.`);
+
+        if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+        // -----------------------------------------------------------------
+        // STAGE 2 — Generate 5 test cases
+        // -----------------------------------------------------------------
+        aiBuilderState.testedStage = 'Stage 2 of 5 — Generating 5 case studies…';
+        pushTestedProgress('Generate 5 test cases', 'running');
+        const cases = await generateTestCases(
+          aiBuilderState.presentation,
+          oeText,
+          aiBuilderState.caseArchetypes
+        );
+        setTestedProgressLast('done', `${cases.length} cases: ${cases.map(c => c.archetype).join(', ').slice(0, 100)}`);
+        aiBuilderState.testedCases = cases;
+        render();
+
+        if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+        // -----------------------------------------------------------------
+        // STAGE 3 — Critique v1
+        // -----------------------------------------------------------------
+        aiBuilderState.testedStage = 'Stage 3 of 5 — Testing v1 against cases…';
+        pushTestedProgress('Critique v1 against cases', 'running');
+        let currentChecklist = v1.features;
+        let critique = await critiqueChecklist(aiBuilderState.presentation, cases, currentChecklist);
+        const v1Critical = (critique.aggregate?.criticalGaps || []).length;
+        const v1Minor = (critique.aggregate?.minorGaps || []).length;
+        setTestedProgressLast('done', `${v1Critical} critical gaps, ${v1Minor} minor`);
+        changeLog.push(`v1 critique: ${v1Critical} critical gap(s), ${v1Minor} minor. ${critique.summary || ''}`);
+
+        if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+        // -----------------------------------------------------------------
+        // STAGE 4 — Iterate (max 2 revisions)
+        // -----------------------------------------------------------------
+        const MAX_REVISIONS = 2;
+
+        for (let iter = 1; iter <= MAX_REVISIONS; iter++) {
+          if (!critiqueHasCriticalGaps(critique)) {
+            // Convergence — no critical gaps left.
+            pushTestedProgress(`Convergence reached at v${iter}`, 'done', 'No critical gaps remaining');
+            break;
+          }
+
+          if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+          aiBuilderState.testedStage = `Stage 4 of 5 — Revising checklist (v${iter + 1})…`;
+          aiBuilderState.testedIteration = iter;
+          pushTestedProgress(`Revise checklist → v${iter + 1}`, 'running');
+          const revised = await reviseChecklist(
+            aiBuilderState.presentation,
+            currentChecklist,
+            critique,
+            oeText
+          );
+          currentChecklist = revised.features;
+          aiBuilderState.generatedJson = revised;
+          aiBuilderState.generatedJsonText = JSON.stringify(revised, null, 2);
+          setTestedProgressLast('done', `${currentChecklist.length} features (was ${changeLog.length === 1 ? v1.features.length : '?'})`);
+          changeLog.push(`v${iter + 1}: revised. ${currentChecklist.length} features.`);
+
+          if (testedBuildCancelled) throw new Error('Cancelled by user');
+
+          // Re-critique
+          aiBuilderState.testedStage = `Stage 4 of 5 — Re-testing v${iter + 1}…`;
+          pushTestedProgress(`Re-critique v${iter + 1}`, 'running');
+          critique = await critiqueChecklist(aiBuilderState.presentation, cases, currentChecklist);
+          const newCritical = (critique.aggregate?.criticalGaps || []).length;
+          const newMinor = (critique.aggregate?.minorGaps || []).length;
+          setTestedProgressLast('done', `${newCritical} critical gaps, ${newMinor} minor`);
+          changeLog.push(`v${iter + 1} critique: ${newCritical} critical, ${newMinor} minor. ${critique.summary || ''}`);
+
+          if (iter === MAX_REVISIONS && critiqueHasCriticalGaps(critique)) {
+            pushTestedProgress(`Max revisions reached`, 'done', `${newCritical} gap(s) remain. Best-effort version returned.`);
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // STAGE 5 — Hand off to review
+        // -----------------------------------------------------------------
+        aiBuilderState.testedStage = 'Stage 5 of 5 — Finalising…';
+        pushTestedProgress('Finalise and hand off to review', 'running');
+
+        // Persist the cases and change log alongside the checklist (used by review UI)
+        aiBuilderState.testedChangeLog = changeLog;
+        // Also fold them into the JSON we'll save so they end up in Supabase
+        aiBuilderState.generatedJson._testedBuildMeta = {
+          cases: cases,
+          changeLog: changeLog,
+          iterations: aiBuilderState.testedIteration + 1,
+          finalCritique: critique
+        };
+        aiBuilderState.generatedJsonText = JSON.stringify(aiBuilderState.generatedJson, null, 2);
+        setTestedProgressLast('done', 'Ready for review');
+
+        aiBuilderState.testedStage = null;
+        aiBuilderState.step = 'review';
+        aiBuilderState.errorMessage = '';
+        render();
+
+      } catch (err) {
+        if (testedBuildCancelled) {
+          aiBuilderState.step = 'paste';
+          aiBuilderState.errorMessage = 'Build cancelled. Any partial result was discarded.';
+          render();
+        } else {
+          abortWith(err);
+        }
+      } finally {
+        testedBuildCancelled = false;
+      }
+    };
+
+    // Cancel button handler. Sets the flag; the pipeline's per-stage check
+    // catches it on the next stage boundary.
+    window.cancelTestedBuild = function() {
+      testedBuildCancelled = true;
+      aiBuilderState.testedStage = 'Cancelling — finishing current stage…';
+      render();
     };
 
     window.processWithAI = async function() {
@@ -6710,13 +7244,13 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       }
       
       if (!WORKER_URL) {
-        // No worker configured → fall through to manual mode
         switchToManualPaste();
         return;
       }
 
       aiBuilderState.errorMessage = '';
       aiBuilderState.step = 'processing';
+      aiBuilderState.buildMode = 'quick';  // ensure progress display matches
       render();
 
       try {
@@ -6724,71 +7258,31 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         const systemPrompt = buildAIBuilderSystemPrompt();
         const userMessage = buildAIBuilderUserMessage(aiBuilderState.presentation, oeText, currentFeatures);
 
-        const response = await fetch(`${WORKER_URL}/api/claude`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-5-20250929',
-            // 8000 is plenty for a 30-feature JSON with design notes and comments.
-            // 4000 was getting truncated mid-array on full-detail responses.
-            max_tokens: 8000,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userMessage }]
-          })
+        const parsed = await callClaudeForJson(systemPrompt, userMessage, {
+          maxTokens: 8000,
+          stageName: 'Quick build'
         });
 
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Worker returned ${response.status}: ${errText.slice(0, 200)}`);
-        }
-
-        const data = await response.json();
-        
-        // Extract text from response
-        let aiText = '';
-        if (data.content && Array.isArray(data.content)) {
-          aiText = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
-        } else if (typeof data.completion === 'string') {
-          aiText = data.completion;
-        } else {
-          throw new Error('Unexpected response format from Claude');
-        }
-
-        // Stash on window for post-mortem debugging from the console.
-        // If parsing fails, you can run `window.lastAIText` in DevTools to inspect.
-        window.lastAIText = aiText;
-        window.lastAIRawResponse = data;
-        console.log('AI response length:', aiText.length, 'chars');
-        console.log('AI response stop_reason:', data.stop_reason || '(unknown)');
-
-        // Parse the JSON (allow for code fences just in case)
-        const jsonText = extractJsonFromText(aiText);
-        const parsed = JSON.parse(jsonText);
-        
         if (!parsed.features || !Array.isArray(parsed.features)) {
           throw new Error('AI response missing "features" array');
         }
-        
+
         aiBuilderState.generatedJson = parsed;
         aiBuilderState.generatedJsonText = JSON.stringify(parsed, null, 2);
         aiBuilderState.step = 'review';
         aiBuilderState.errorMessage = '';
         render();
-        
+
       } catch (err) {
         console.error('AI processing error:', err);
         aiBuilderState.step = 'paste';
-        // JSON parse errors that mention array elements or unexpected end usually
-        // mean the response got truncated mid-output. Tell the user something
-        // actionable rather than just the raw parser message.
         const m = (err.message || '').toLowerCase();
-        const looksTruncated = m.includes('after array element') ||
+        const looksTruncated = m.includes('cut off') || m.includes('after array element') ||
                                 m.includes('unexpected end') ||
-                                m.includes('expected') && m.includes('json');
+                                (m.includes('expected') && m.includes('json'));
         if (looksTruncated) {
           aiBuilderState.errorMessage =
-            `AI response was cut off before finishing the JSON. ` +
-            `This usually means the response was too long. Try again — sometimes a fresh ` +
+            `AI response was cut off before finishing the JSON. Try again — sometimes a fresh ` +
             `attempt produces a shorter output. If it keeps failing, use "Manual mode" instead.`;
         } else {
           aiBuilderState.errorMessage = `AI processing failed: ${err.message}. You can try "Manual mode" instead.`;
@@ -6982,6 +7476,11 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       const presentation = aiBuilderState.presentation;
       const isBuiltIn = !!MASTER_FEATURES[presentation];
       
+      // Capture tested-build metadata (if present) so we can attach it to the
+      // presentation entry alongside the features. This makes the cases and
+      // change log retrievable later from Supabase.
+      const testedMeta = parsed._testedBuildMeta || null;
+
       // Normalise features — strip _design_notes and any unknown top-level fields
       const cleanFeatures = parsed.features.map(f => {
         const out = {
@@ -7018,6 +7517,15 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           });
           existing.features = updated;
         }
+        // Persist tested-build meta on the presentation entry
+        if (testedMeta) {
+          userPreferences.customizations.presentations[presentation].testedBuild = {
+            timestamp: new Date().toISOString(),
+            cases: testedMeta.cases,
+            changeLog: testedMeta.changeLog,
+            iterations: testedMeta.iterations
+          };
+        }
       } else {
         // Custom presentation
         if (!userPreferences.customizations.customPresentations) {
@@ -7039,11 +7547,28 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
             });
             userPreferences.customizations.customPresentations[idx].features = updated;
           }
+          if (testedMeta) {
+            userPreferences.customizations.customPresentations[idx].testedBuild = {
+              timestamp: new Date().toISOString(),
+              cases: testedMeta.cases,
+              changeLog: testedMeta.changeLog,
+              iterations: testedMeta.iterations
+            };
+          }
         } else {
-          userPreferences.customizations.customPresentations.push({
+          const newEntry = {
             name: presentation,
             features: cleanFeatures
-          });
+          };
+          if (testedMeta) {
+            newEntry.testedBuild = {
+              timestamp: new Date().toISOString(),
+              cases: testedMeta.cases,
+              changeLog: testedMeta.changeLog,
+              iterations: testedMeta.iterations
+            };
+          }
+          userPreferences.customizations.customPresentations.push(newEntry);
         }
       }
 
@@ -8508,6 +9033,86 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           status.textContent = '✅ Patient data saved locally (auto-clears at midnight)';
         }, 500);
       }
+    }
+
+    // ============================================================================
+    // AI BUILDER REVIEW — block-grouped feature summary
+    // ============================================================================
+    //
+    // Displays the generated features grouped by type (History, Examination,
+    // Investigation, Differential), with History sub-grouped by reportSection
+    // and Examination sub-grouped by examSystem. Gives the user a fast visual
+    // sense of what the checklist covers without reading raw JSON.
+    function renderFeatureSummaryBlocks(features) {
+      if (!features || features.length === 0) return '';
+
+      const escapeHtml = s => String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+      // Group by type
+      const byType = { History: [], Examination: [], Investigation: [], Differential: [], Other: [] };
+      features.forEach(f => {
+        const t = f.type || 'Other';
+        if (byType[t]) byType[t].push(f);
+        else byType.Other.push(f);
+      });
+
+      const renderFeatureChip = (f) => {
+        const labels = `${escapeHtml(f.safe || '?')} / ${escapeHtml(f.unsafe || '?')}`;
+        const flag = f.redFlag ? '<span class="text-red-600 font-bold ml-1" title="Red flag">▶</span>' : '';
+        const btnTypeBadge = (f.buttonType && f.buttonType !== 'tertiary')
+          ? `<span class="text-xs bg-purple-100 text-purple-800 px-1 rounded ml-1">${escapeHtml(f.buttonType)}</span>`
+          : '';
+        return `<div class="bg-white border border-gray-200 rounded px-2 py-1 text-xs">
+          <span class="text-gray-500">${escapeHtml(f.key || '')}</span> — ${labels}${flag}${btnTypeBadge}
+        </div>`;
+      };
+
+      const renderTypeBlock = (typeName, list, color, subgroupKey) => {
+        if (list.length === 0) return '';
+        let body;
+        if (subgroupKey) {
+          // Group by subgroupKey (reportSection or examSystem); preserve first-appearance order
+          const subgroups = {};
+          const subgroupOrder = [];
+          list.forEach(f => {
+            const k = f[subgroupKey] || '_untagged';
+            if (!subgroups[k]) { subgroups[k] = []; subgroupOrder.push(k); }
+            subgroups[k].push(f);
+          });
+          body = subgroupOrder.map(k => `
+            <div class="mb-2">
+              <p class="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
+                ${k === '_untagged' ? '(untagged)' : escapeHtml(k)}
+                <span class="text-gray-400 font-normal lowercase">— ${subgroups[k].length} feature${subgroups[k].length === 1 ? '' : 's'}</span>
+              </p>
+              <div class="space-y-1">${subgroups[k].map(renderFeatureChip).join('')}</div>
+            </div>
+          `).join('');
+        } else {
+          body = `<div class="space-y-1">${list.map(renderFeatureChip).join('')}</div>`;
+        }
+        return `
+          <div class="border-l-4 ${color} bg-gray-50 rounded p-2">
+            <p class="font-bold text-sm mb-2">${typeName} <span class="text-xs text-gray-500 font-normal">— ${list.length} feature${list.length === 1 ? '' : 's'}</span></p>
+            ${body}
+          </div>
+        `;
+      };
+
+      return `
+        <details class="bg-white border border-gray-200 rounded p-2" open>
+          <summary class="font-semibold cursor-pointer text-gray-800 text-sm">📑 Feature Summary (grouped)</summary>
+          <div class="mt-3 space-y-2">
+            ${renderTypeBlock('History', byType.History, 'border-blue-400', 'reportSection')}
+            ${renderTypeBlock('Examination', byType.Examination, 'border-green-400', 'examSystem')}
+            ${renderTypeBlock('Investigation', byType.Investigation, 'border-amber-400', null)}
+            ${renderTypeBlock('Differential', byType.Differential, 'border-purple-400', null)}
+            ${byType.Other.length > 0 ? renderTypeBlock('Other', byType.Other, 'border-gray-400', null) : ''}
+          </div>
+        </details>
+      `;
     }
 
     // ============================================================================
