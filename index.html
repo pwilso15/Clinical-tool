@@ -5914,10 +5914,10 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                     <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
                       <p class="text-sm font-semibold text-gray-800">Build mode:</p>
                       <div class="space-y-2">
-                        <label class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white">
+                        <label onclick="setBuildMode('quick')" class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white">
                           <input type="radio" name="build-mode" value="quick" 
                             ${aiBuilderState.buildMode === 'quick' ? 'checked' : ''}
-                            onchange="aiBuilderState.buildMode='quick'; render();"
+                            onchange="setBuildMode('quick')"
                             class="mt-0.5">
                           <div class="flex-1 text-sm">
                             <span class="font-medium">⚡ Quick build</span>
@@ -5925,10 +5925,10 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                             <p class="text-xs text-gray-600 mt-0.5">AI generates a checklist directly from the OE review.</p>
                           </div>
                         </label>
-                        <label class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white border border-purple-200 bg-purple-50">
+                        <label onclick="setBuildMode('tested')" class="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-white border border-purple-200 bg-purple-50">
                           <input type="radio" name="build-mode" value="tested" 
                             ${aiBuilderState.buildMode === 'tested' ? 'checked' : ''}
-                            onchange="aiBuilderState.buildMode='tested'; render();"
+                            onchange="setBuildMode('tested')"
                             class="mt-0.5">
                           <div class="flex-1 text-sm">
                             <span class="font-medium">🧪 Tested build</span>
@@ -5959,7 +5959,7 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                     ` : ''}
 
                     <div class="flex gap-2">
-                      <button onclick="${aiBuilderState.buildMode === 'tested' ? 'processTestedBuild()' : 'processWithAI()'}" 
+                      <button onclick="dispatchBuild()" 
                         class="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold">
                         ${aiBuilderState.buildMode === 'tested' ? '🧪 Run Tested Build' : '🤖 Process with AI (auto)'}
                       </button>
@@ -7231,6 +7231,35 @@ Produce a revised checklist that addresses the critique. Return the full feature
     // Failures: any thrown error stops the pipeline; the user sees the partial
     // result they have so far (e.g. v1 checklist if Stage 4 failed) plus an
     // error message explaining what failed.
+    // Set the AI Builder build mode and re-render. Used by the radio buttons.
+    // Explicitly writes to window.aiBuilderState (the single source of truth)
+    // and forces a render. Some inline event handlers on labels/inputs don't
+    // fire reliably across devices when the radio's checked state changes via
+    // onchange — using this helper from onclick on the parent label is more
+    // reliable.
+    window.setBuildMode = function(mode) {
+      if (mode !== 'quick' && mode !== 'tested') return;
+      window.aiBuilderState.buildMode = mode;
+      console.log('[AI Builder] build mode set to:', mode);
+      render();
+    };
+
+    // Read the actual checked radio at click time, sync state, dispatch.
+    // Defensive against the state-vs-display getting out of sync (e.g. if
+    // a radio click somehow updated the visible UI but not the state, or
+    // vice versa). The DOM at click time is the source of truth.
+    window.dispatchBuild = function() {
+      const checkedRadio = document.querySelector('input[name="build-mode"]:checked');
+      const visibleMode = checkedRadio ? checkedRadio.value : window.aiBuilderState.buildMode;
+      console.log('[AI Builder] dispatching build, mode from radio =', visibleMode, ', state =', window.aiBuilderState.buildMode);
+      window.aiBuilderState.buildMode = visibleMode;
+      if (visibleMode === 'tested') {
+        window.processTestedBuild();
+      } else {
+        window.processWithAI();
+      }
+    };
+
     window.processTestedBuild = async function() {
       const oeText = aiBuilderState.oeReviewText.trim();
       if (oeText.length < 50) {
