@@ -6610,20 +6610,29 @@ So your label text MUST be:
    - "full active range of motion" / "restricted range of motion"
    - "rapid recovery to baseline" / "prolonged recovery"
 
-6. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+6. **Differential / Differential Diagnosis features.** These are special — they record candidate diagnoses being considered, not findings being present/absent. The data model still requires \`safe\` and \`unsafe\` fields for these features, but the convention is different:
+   - Use \`type: "Differential Diagnosis"\` (with the space — that's the canonical type name)
+   - Set \`safe\` and \`unsafe\` to **the same diagnosis name** (e.g. \`safe: "Acute coronary syndrome"\`, \`unsafe: "Acute coronary syndrome"\`)
+   - Do NOT leave \`safe\` empty — every feature must have a non-empty safe label
+   - Do NOT use snake_case identifiers, "?", or placeholders in either field — use the full clinical diagnosis name a doctor would write in a note
+   - 4–8 differentials per presentation is typical
+   - Mark high-priority "must-not-miss" diagnoses with \`redFlag: true\`
+   - Differentials don't have \`reportSection\` or \`examSystem\` — omit those fields
 
-7. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
+7. **Red flags**: Mark as \`redFlag: true\` only the genuinely killer items — things that mandate immediate escalation. Be parsimonious. Per Gawande's checklist manifesto, red flags should be the "killer items," not every concerning finding.
+
+8. **Length.** Aim for **20–30 features total**. Resist the urge to include everything OE suggests. Cut anything that:
    - Is captured by a more general item already
    - Is rarely diagnostically useful
    - Is more appropriately a free-text field than a button
 
-8. **Phrasing test — apply to every label.** The HOPC renders telegraphically — short clipped sentences, doctor-style. Read your sentence aloud:
+9. **Phrasing test — apply to every label.** The HOPC renders telegraphically — short clipped sentences, doctor-style. Read your sentence aloud:
    - Within a reportSection group, positives become "<unsafe1>, <unsafe2>, and <unsafe3>"; negatives become "no <unsafe1>, <unsafe2>, or <unsafe3>"
    - Worked example for pain_character group: "Pain radiates to left arm, sharp in quality, with sudden onset."
    - Worked example for negatives in associated_symptoms: "No nausea, syncope, or palpitations."
    If your label doesn't read cleanly when slotted in like that, rephrase it.
 
-8. **Comments**: Add \`comment\` only where it adds genuine clinical pearl value (likelihood ratio, classic teaching, key distinction). Skip on obvious items.
+10. **Comments**: Add \`comment\` only where it adds genuine clinical pearl value (likelihood ratio, classic teaching, key distinction). Skip on obvious items.
 
 ## Output format
 
@@ -7380,6 +7389,27 @@ Produce a revised checklist that addresses the critique. Return the full feature
       features.forEach((f, i) => {
         const where = `Feature ${i + 1} (${f.key || '<no key>'})`;
         if (!f.key) errors.push(`${where}: missing key.`);
+
+        // Differential features have unique semantics — both labels are the
+        // diagnosis name, polarity rules don't apply, and a missing safe is
+        // auto-fillable from unsafe (handled at import time). Treat them
+        // separately to avoid spurious errors.
+        const isDifferential = f.type === 'Differential' || f.type === 'Differential Diagnosis';
+
+        if (isDifferential) {
+          // Required: must have at least an unsafe (the diagnosis itself).
+          if (!f.unsafe) {
+            errors.push(`${where}: Differential is missing the diagnosis name (unsafe field).`);
+          }
+          // safe is auto-fillable on import — show as info only
+          if (!f.safe && f.unsafe) {
+            warnings.push(`${where}: Differential safe label is empty — will auto-fill from unsafe ("${f.unsafe}") on import.`);
+          }
+          // Skip the rest of the History/Exam-shaped checks
+          if (!f.type) errors.push(`${where}: missing type.`);
+          return;
+        }
+
         if (!f.safe) errors.push(`${where}: missing safe label.`);
         if (!f.unsafe) errors.push(`${where}: missing unsafe label.`);
         if (!f.type) errors.push(`${where}: missing type.`);
@@ -7406,7 +7436,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
         }
         if (f.safe.length > 60) warnings.push(`${where}: safe label is ${f.safe.length} chars — consider splitting.`);
         if (f.unsafe.length > 60) warnings.push(`${where}: unsafe label is ${f.unsafe.length} chars — consider splitting.`);
-        if (!['History', 'Examination', 'Investigation', 'Differential'].includes(f.type)) {
+        if (!['History', 'Examination', 'Investigation', 'Differential', 'Differential Diagnosis'].includes(f.type)) {
           errors.push(`${where}: type "${f.type}" is not valid.`);
         }
         if (f.type === 'History') {
@@ -7481,13 +7511,30 @@ Produce a revised checklist that addresses the critique. Return the full feature
       // change log retrievable later from Supabase.
       const testedMeta = parsed._testedBuildMeta || null;
 
-      // Normalise features — strip _design_notes and any unknown top-level fields
+      // Normalise features — strip _design_notes and any unknown top-level fields.
+      // Also auto-repair common AI mistakes:
+      //   - Differential features with empty `safe` get the diagnosis name copied in
+      //   - "Differential" type gets normalised to canonical "Differential Diagnosis"
       const cleanFeatures = parsed.features.map(f => {
+        const isDifferential = f.type === 'Differential' || f.type === 'Differential Diagnosis';
+        let safeLabel = f.safe || '';
+        let unsafeLabel = f.unsafe || '';
+
+        // Auto-repair: Differential features need both labels populated. Convention
+        // (per existing chest_pain_ddx_* features) is the diagnosis name in both,
+        // optionally prefixed with "Exclude " in safe. We default to the simpler
+        // "same in both" form — user can edit in Configure if they want "Exclude X".
+        if (isDifferential) {
+          if (!safeLabel && unsafeLabel) safeLabel = unsafeLabel;
+          if (!unsafeLabel && safeLabel) unsafeLabel = safeLabel;
+        }
+
         const out = {
           key: f.key || `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          safe: f.safe || '',
-          unsafe: f.unsafe || '',
-          type: f.type || 'History',
+          safe: safeLabel,
+          unsafe: unsafeLabel,
+          // Normalise type to the canonical "Differential Diagnosis" used in MASTER_FEATURES
+          type: isDifferential ? 'Differential Diagnosis' : (f.type || 'History'),
           visible: f.visible !== false,
           redFlag: !!f.redFlag,
           buttonType: f.buttonType || 'tertiary'
@@ -9050,12 +9097,19 @@ Produce a revised checklist that addresses the critique. Return the full feature
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-      // Group by type
+      // Group by type. Differential / "Differential Diagnosis" are aliases —
+      // canonical type is "Differential Diagnosis" but AI sometimes writes
+      // "Differential", and we want both shown in the same Differentials block.
       const byType = { History: [], Examination: [], Investigation: [], Differential: [], Other: [] };
       features.forEach(f => {
         const t = f.type || 'Other';
-        if (byType[t]) byType[t].push(f);
-        else byType.Other.push(f);
+        if (t === 'Differential' || t === 'Differential Diagnosis') {
+          byType.Differential.push(f);
+        } else if (byType[t]) {
+          byType[t].push(f);
+        } else {
+          byType.Other.push(f);
+        }
       });
 
       const renderFeatureChip = (f) => {
