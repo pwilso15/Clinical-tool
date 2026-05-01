@@ -84,9 +84,30 @@
     const { createClient } = supabase;
 
     // Initialize Supabase
+    //
+    // autoRefreshToken: false — by default, the client refreshes the access token
+    // every ~50 minutes in the background even if the tab is idle. With multiple
+    // devices on one account this causes refresh-token rotation collisions:
+    // device A refreshes (invalidates the old token), device B then tries to
+    // refresh with that now-invalid token and fails silently. Result: random
+    // "Refresh Token Not Found" errors after periods of inactivity.
+    //
+    // We disable proactive refresh and instead refresh on-demand only when
+    // we're about to save (see saveUserPreferences). The session lasts the
+    // full JWT lifetime (1 hour by default) without unnecessary rotation.
+    //
+    // detectSessionInUrl: false — we don't use OAuth redirect links; turning
+    // this off avoids spurious URL-parsing on every page load.
     const supabaseClient = createClient(
       'https://rlnbocazncftnopgzmkt.supabase.co',
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsbmJvY2F6bmNmdG5vcGd6bWt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNTMzOTAsImV4cCI6MjA4OTcyOTM5MH0.-75l-RKyif8uAjzriGJuAsrAydXmLbqzsHggwu-W0sc'
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsbmJvY2F6bmNmdG5vcGd6bWt0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNTMzOTAsImV4cCI6MjA4OTcyOTM5MH0.-75l-RKyif8uAjzriGJuAsrAydXmLbqzsHggwu-W0sc',
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: true,
+          detectSessionInUrl: false
+        }
+      }
     );
 
     // Cloudflare Worker URL for Claude API proxying
@@ -4247,26 +4268,59 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         }
       }
 
-      // Probe Supabase for the current session. If the refresh token is dead,
-      // getSession() typically still returns a session object (cached locally)
-      // but the first server-side request will fail with an auth error. We catch
-      // both cases so the banner shows up immediately on load instead of only
-      // after the user tries to save.
+      // Probe Supabase for the current session. Two scenarios to handle:
+      //
+      // 1. No session at all → show login screen (normal first-visit case).
+      // 2. Session exists locally but server rejects it → clear it silently
+      //    and show the login screen. Don't raise the banner — for a stale
+      //    session detected on load, the user just needs to sign in again,
+      //    they don't need to be alarmed about "saves not syncing" because
+      //    they haven't tried to save anything yet.
+      //
+      // The banner is reserved for the worse case: session dies mid-session
+      // while the user is actively working. That's caught by saveUserPreferences.
       try {
         const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
 
-        if (sessionError) {
-          console.error('Session probe failed:', sessionError);
-          if (isAuthError(sessionError)) sessionExpired = true;
-        }
-
-        if (session) {
+        if (sessionError && isAuthError(sessionError)) {
+          console.warn('Stale session on load — clearing silently:', sessionError.message);
+          await supabaseClient.auth.signOut({ scope: 'local' }).catch(() => {});
+          currentUser = null;
+          userPreferences = {};
+          sessionExpired = false;
+        } else if (session) {
           currentUser = session.user;
-          await loadUserPreferences();  // this also flips sessionExpired on auth error
+          // Verify by trying to load preferences. If THAT fails with auth error,
+          // the cached session is stale — clear it silently and let the login
+          // screen appear.
+          try {
+            await loadUserPreferences();
+            // If load triggered sessionExpired (refresh token dead), clear it
+            // so the user gets a clean login screen rather than a banner.
+            if (sessionExpired) {
+              console.warn('Auth failed during initial load — clearing session silently.');
+              await supabaseClient.auth.signOut({ scope: 'local' }).catch(() => {});
+              currentUser = null;
+              userPreferences = {};
+              sessionExpired = false;
+            }
+          } catch (loadErr) {
+            if (isAuthError(loadErr)) {
+              console.warn('Load failed with auth error — clearing session silently.');
+              await supabaseClient.auth.signOut({ scope: 'local' }).catch(() => {});
+              currentUser = null;
+              userPreferences = {};
+              sessionExpired = false;
+            } else {
+              console.error('Non-auth load error:', loadErr);
+            }
+          }
         }
       } catch (probeErr) {
         console.error('Initialize probe error:', probeErr);
-        if (isAuthError(probeErr)) sessionExpired = true;
+        // Probe itself failed — be conservative, treat as no-session
+        currentUser = null;
+        sessionExpired = false;
       }
 
       supabaseClient.auth.onAuthStateChange(async (event, session) => {
