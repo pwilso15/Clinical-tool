@@ -3039,7 +3039,27 @@ What rare or uncommon diagnoses should be considered in the differential for thi
               next = isNaN(num) ? '0' : String(num + 1);
             }
             break;
-            
+
+          case 'scale':
+            // Multivalent scale (e.g. NYHA): cycle null → option[0] → option[1] → ... → null
+            // The options come from the feature definition itself.
+            if (Array.isArray(feature.options) && feature.options.length > 0) {
+              if (current === 'null') {
+                next = feature.options[0].value;
+              } else {
+                const idx = feature.options.findIndex(o => o.value === current);
+                if (idx === -1 || idx === feature.options.length - 1) {
+                  next = 'null';
+                } else {
+                  next = feature.options[idx + 1].value;
+                }
+              }
+            } else {
+              // No options defined — silently fall through to null
+              next = 'null';
+            }
+            break;
+
           case 'tertiary':
           default:
             // Tertiary (default): null → safe → unsafe → null
@@ -3140,6 +3160,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           if (num <= 6) return `${base} bg-yellow-500 hover:bg-yellow-600 text-gray-900`;
           if (num <= 9) return `${base} bg-orange-500 hover:bg-orange-600`;
           return `${base} bg-red-600 hover:bg-red-700`; // 10
+
+        case 'scale':
+          // Multivalent: grey when unset, blue when any option chosen.
+          // We don't know the semantics of each option (NYHA III isn't necessarily
+          // "bad", just "informational") so we use a neutral colour rather than
+          // the green/yellow/red gradient used by severity scales.
+          if (state === 'null' || !state) return `${base} bg-gray-500 hover:bg-gray-600`;
+          return `${base} bg-blue-600 hover:bg-blue-700`;
           
         case 'tertiary':
         default:
@@ -3150,7 +3178,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       }
     }
 
-    function getButtonText(safe, unsafe, state, noteText = null, buttonType = 'tertiary') {
+    function getButtonText(safe, unsafe, state, noteText = null, buttonType = 'tertiary', options = null) {
       // If there's a custom note, show it
       if (noteText) return noteText;
       
@@ -3179,7 +3207,18 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           // Pain scale: Show number
           if (state === 'null') return `${safe} / ${unsafe}`;
           return `Pain: ${state}/10`;
-          
+
+        case 'scale':
+          // Multivalent scale: show "{unsafe} {label}" when set, else "{unsafe} —" prompt
+          if (state === 'null' || !state) {
+            return unsafe ? `${unsafe} —` : 'Tap to set';
+          }
+          if (Array.isArray(options)) {
+            const opt = options.find(o => o.value === state);
+            if (opt) return unsafe ? `${unsafe} ${opt.label || opt.value}` : (opt.label || opt.value);
+          }
+          return state;
+
         case 'tertiary':
         default:
           // Tertiary (default): Show safe/unsafe based on state
@@ -3270,6 +3309,21 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         case 'pain-scale':
           if (state && state !== 'null') {
             return { text: `${lowercaseFirst(feature.unsafe)} (${state}/10)`, polarity: 'positive' };
+          }
+          return null;
+        case 'scale':
+          // Multivalent button — feature.options is an array of { value, label }.
+          // The toggled state is the option's `value`. We render the label.
+          // Polarity is always 'positive' because picking any value is recording
+          // a finding (e.g. NYHA class III is a positive observation).
+          // Special-case "isOwnLine: true" — render on its own line in the report
+          // (e.g. NYHA class) by attaching a marker the formatter respects.
+          if (state && state !== 'null' && Array.isArray(feature.options)) {
+            const opt = feature.options.find(o => o.value === state);
+            if (!opt) return null;
+            // Format: "{unsafe label} {option label}", e.g. "NYHA class III"
+            const text = `${feature.unsafe || ''} ${opt.label || opt.value}`.trim();
+            return { text, polarity: 'positive', ownLine: true };
           }
           return null;
         case 'tertiary':
@@ -3381,6 +3435,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       // narrative flow by ordering the features it generates.
       const groups = {};                  // { sectionKey: { positives: [], negatives: [] } }
       const sectionOrder = [];            // first-appearance order of section keys
+      const ownLineItems = [];            // scale-button results that render on their own line
 
       const allFeatures = getCustomizedFeatures(presentation);
 
@@ -3393,6 +3448,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
         // Track for ROS dedup
         mentionedItems.add(rendered.text);
+
+        // ownLine items (e.g. "NYHA class III") render as standalone sentences
+        // outside the reportSection grouping — they are too discrete to fit
+        // into a comma-separated section.
+        if (rendered.ownLine) {
+          ownLineItems.push(rendered.text);
+          return;
+        }
 
         // Bucket into the section the AI chose (or "_other" if untagged).
         const sectionKey = feature.reportSection || '_other';
@@ -3423,9 +3486,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         if (sentence) sentences.push(sentence);
       });
 
+      // Append ownLine items as their own sentences, each terminated with a period.
+      // Scale buttons (NYHA, mMRC, etc.) sit at the end of the HOPC because they
+      // are summary classifications that read naturally after the narrative.
+      ownLineItems.forEach(item => {
+        sentences.push(item.charAt(0).toUpperCase() + item.slice(1) + '.');
+      });
+
       return {
-        // Newline between sections instead of a single space, so each section
-        // sits on its own line in the report.
         text: sentences.length > 0 ? sentences.join('\n') : null,
         mentioned: mentionedItems
       };
@@ -3578,41 +3646,38 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         });
       }
 
-      // 3. Render. Standard sections in EXAM_SECTIONS order, then anything else
-      //    (which in practice means "Presentation-specific" only).
+      // 3. Render as indented lists. Each system gets its label on one line,
+      //    followed by its findings each indented on their own line. Positives
+      //    listed first (the doctor sees "what's wrong" up top), then negatives
+      //    ("what's reassuring" below). No bullets — just indentation, like a
+      //    discharge summary. This avoids the prose-flow problems that come
+      //    from forcing AI-generated labels into comma-separated sentences.
       const sectionOrder = [
         ...Object.keys(EXAM_SECTIONS),
         ...Object.keys(findings).filter(s => !(s in EXAM_SECTIONS))
       ];
 
-      const sentences = [];
+      const blocks = [];
+      const INDENT = '    '; // 4 spaces — matches typical clinical note indentation
+
       sectionOrder.forEach(section => {
         const f = findings[section];
         if (!f) return;
         const { positive, negative } = f;
+        if (positive.length === 0 && negative.length === 0) return;
 
-        let body = '';
-        if (positive.length > 0 && negative.length > 0) {
-          body = `${formatList(positive)}, but ${formatList(negative)}`;
-        } else if (positive.length > 0) {
-          body = formatList(positive);
-        } else if (negative.length > 0) {
-          body = formatList(negative);
-        } else {
-          return;
-        }
+        const allFindings = [...positive, ...negative];
+        const lines = allFindings.map(item => `${INDENT}${item}`);
 
-        // "Presentation-specific" gets no label prefix (legacy behaviour)
+        // "Presentation-specific" gets no header (legacy)
         if (section === 'Presentation-specific') {
-          sentences.push(`${body}.`);
+          blocks.push(lines.join('\n'));
         } else {
-          sentences.push(`${section}: ${body}.`);
+          blocks.push(`${section}:\n${lines.join('\n')}`);
         }
       });
 
-      // Newline between exam systems so each (Cardiovascular, Respiratory, etc.)
-      // sits on its own line in the report.
-      return sentences.length > 0 ? sentences.join('\n') : null;
+      return blocks.length > 0 ? blocks.join('\n') : null;
     }
 
     // ============================================================================
@@ -3775,8 +3840,21 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       if (patientData.investigations.other) {
         invParts.push(`Other: ${patientData.investigations.other}`);
       }
+      // Pull in any presentation-specific Investigation features the user has toggled
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const invFeatures = allFeatures.filter(f => f.type === 'Investigation');
+        invFeatures.forEach(feature => {
+          const state = patientData.features[feature.key];
+          const note = patientData.notes && patientData.notes[feature.key];
+          if (note) invParts.push(note);
+          else if (state === 'safe') invParts.push(lowercaseFirst(feature.safe));
+          else if (state === 'unsafe') invParts.push(lowercaseFirst(feature.unsafe));
+        });
+      }
       if (invParts.length > 0) {
-        parts.push(`\n\nInvestigations:\n${invParts.join("\n")}`);
+        const indented = invParts.map(p => `    ${p}`).join('\n');
+        parts.push(`\n\nInvestigations:\n${indented}`);
       }
 
       // Differential Diagnosis (items in "differential" state)
@@ -3787,8 +3865,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         const ddxFeatures = allFeatures.filter(f => f.type === "Differential Diagnosis");
         
         if (ddxFeatures.length > 0) {
-          const differentials = [];
-          
           ddxFeatures.forEach(feature => {
             const state = patientData.differentials[feature.key];
             const note = patientData.notes && patientData.notes[feature.key];
@@ -3796,19 +3872,16 @@ What rare or uncommon diagnoses should be considered in the differential for thi
             // Only include items marked as "differential" (yellow button)
             if (state === "differential") {
               const text = feature.unsafe; // Use unsafe label for DDx items
-              differentials.push(note ? note : text);
+              ddxParts.push(note ? note : text);
             }
           });
-          
-          if (differentials.length > 0) {
-            ddxParts.push(differentials.join(", "));
-          }
         }
       }
       
       // Only show Differential Diagnosis section if features are actually selected
       if (ddxParts.length > 0) {
-        parts.push(`\n\nDifferential Diagnosis:\n${ddxParts.join(", ")}`);
+        const indented = ddxParts.map(p => `    ${p}`).join('\n');
+        parts.push(`\n\nDifferential Diagnosis:\n${indented}`);
       }
 
       // Diagnosis (items in "diagnosis" state - confirmed diagnoses)
@@ -4060,9 +4133,22 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       if (patientData.investigations.other) {
         invParts.push(`Other: ${patientData.investigations.other}`);
       }
-      
-      // ALWAYS include heading, with content if available
-      parts.push(`\n\nInvestigations:\n${invParts.length > 0 ? invParts.join("\n") : ''}`);
+      // Pull in any presentation-specific Investigation features the user has toggled
+      if (patientData.presentation) {
+        const allFeatures = getCustomizedFeatures(patientData.presentation);
+        const invFeatures = allFeatures.filter(f => f.type === 'Investigation');
+        invFeatures.forEach(feature => {
+          const state = patientData.features[feature.key];
+          const note = patientData.notes && patientData.notes[feature.key];
+          if (note) invParts.push(note);
+          else if (state === 'safe') invParts.push(lowercaseFirst(feature.safe));
+          else if (state === 'unsafe') invParts.push(lowercaseFirst(feature.unsafe));
+        });
+      }
+
+      // ALWAYS include heading, with indented list of items if available
+      const invIndented = invParts.length > 0 ? invParts.map(p => `    ${p}`).join('\n') : '';
+      parts.push(`\n\nInvestigations:\n${invIndented}`);
 
       // Differential Diagnosis - ALWAYS include heading
       const ddxParts = [];
@@ -4072,26 +4158,21 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         const ddxFeatures = allFeatures.filter(f => f.type === "Differential Diagnosis");
         
         if (ddxFeatures.length > 0) {
-          const differentials = [];
-          
           ddxFeatures.forEach(feature => {
             const state = patientData.differentials[feature.key];
             const note = patientData.notes && patientData.notes[feature.key];
             
             // Only include items marked as "differential" (yellow button)
             if (state === "differential") {
-              const text = feature.unsafe; // Use unsafe label for DDx items
-              differentials.push(note ? note : text);
+              const text = feature.unsafe;
+              ddxParts.push(note ? note : text);
             }
           });
-          
-          if (differentials.length > 0) {
-            ddxParts.push(differentials.join(", "));
-          }
         }
       }
-      
-      parts.push(`\n\nDifferential Diagnosis:\n${ddxParts.length > 0 ? ddxParts.join(", ") : ''}`);
+
+      const ddxIndented = ddxParts.length > 0 ? ddxParts.map(p => `    ${p}`).join('\n') : '';
+      parts.push(`\n\nDifferential Diagnosis:\n${ddxIndented}`);
 
       // Diagnosis - ALWAYS include heading
       const diagnosisParts = [];
@@ -4471,7 +4552,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                       ontouchend="cancelLongPress()"
                       class="${getButtonClass(state, hasNote, buttonType)} ${redFlagStyle}"
                       title="${noteText || ''}">
-                      ${feature.redFlag ? '🚩 ' : ''}${getButtonText(feature.safe, feature.unsafe, state, noteText, buttonType)}${hasComment ? '<span class="tooltip-icon">i</span>' : ''}
+                      ${feature.redFlag ? '🚩 ' : ''}${getButtonText(feature.safe, feature.unsafe, state, noteText, buttonType, feature.options)}${hasComment ? '<span class="tooltip-icon">i</span>' : ''}
                     </button>
                   `;
                   
@@ -5156,8 +5237,24 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                         <option value="severity" ${feature.buttonType === 'severity' ? 'selected' : ''}>Severity (None/Mild/Mod/Severe)</option>
                                         <option value="duration" ${feature.buttonType === 'duration' ? 'selected' : ''}>Duration (&lt;5min/5-30min/30min-6hr/&gt;6hr)</option>
                                         <option value="pain-scale" ${feature.buttonType === 'pain-scale' ? 'selected' : ''}>Pain Scale (0-10)</option>
+                                        <option value="scale" ${feature.buttonType === 'scale' ? 'selected' : ''}>Scale — custom options (e.g. NYHA I-IV)</option>
                                       </select>
                                     </div>
+                                    ${feature.buttonType === 'scale' ? `
+                                    <div class="mt-2 bg-blue-50 border border-blue-200 rounded p-2">
+                                      <label class="block text-xs text-gray-700 font-semibold mb-1">⚙️ Scale options (one per line — format: <code>value | label</code>):</label>
+                                      <textarea
+                                        oninput="event.stopPropagation(); changeScaleOptions('${presentation}', ${idx}, this.value)"
+                                        onclick="event.stopPropagation()"
+                                        rows="${Math.max(3, (feature.options || []).length)}"
+                                        class="w-full text-xs font-mono px-2 py-1 border rounded"
+                                        placeholder="I | I — no limitation
+II | II — slight limitation
+III | III — marked limitation
+IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | ${o.label || o.value}`).join('\n')}</textarea>
+                                      <p class="text-xs text-gray-500 mt-1">Each line: short value (used internally) <code>|</code> display label. Examples: NYHA, mMRC, Killip, ASA grade.</p>
+                                    </div>
+                                    ` : ''}
                                     ${(currentType === 'Examination' || currentType === 'Exam') ? `
                                     <div class="mt-2">
                                       <label class="block text-xs text-gray-600 mb-1">🩺 Render under exam system:</label>
@@ -6523,7 +6620,8 @@ So your label text MUST be:
   "safe": "fragment for pertinent negative",
   "unsafe": "fragment for positive finding",
   "type": "History" | "Examination" | "Investigation" | "Differential Diagnosis",
-  "buttonType": "tertiary" | "binary" | "severity" | "duration" | "pain-scale",
+  "buttonType": "tertiary" | "binary" | "severity" | "duration" | "pain-scale" | "scale",
+  "options": [{ "value": "I", "label": "I — description" }, ...] // ONLY when buttonType: "scale"
   "redFlag": true | false,
   "comment": "optional brief evidence note (≤120 chars) shown on hover",
   "reportSection": "snake_case_section_name (you choose — see rule 2)",
@@ -6575,6 +6673,27 @@ So your label text MUST be:
    - \`severity\`: null → mild → moderate → severe. Use for symptom severity where it changes management.
    - \`duration\`: <5min / 5–30min / 30min–6hr / >6hr. Use ONLY for symptoms where duration is diagnostically critical.
    - \`pain-scale\`: 0–10. Use ONLY for actual pain assessment.
+   - \`scale\`: a custom multivalent scale (4–6 options) for established clinical scoring systems. Use ONLY for named, validated scales:
+       - **NYHA class** (I-IV) for heart failure functional limitation
+       - **mMRC dyspnoea scale** (0-4)
+       - **Killip class** (I-IV) for acute MI
+       - **ASA grade** (1-5) for anaesthetic risk
+       - **CCS angina class** (I-IV)
+       - **Mallampati** (I-IV) for airway assessment
+     Requires an \`options\` array of \`{value, label}\` objects — short stable values, descriptive labels:
+     \`\`\`json
+     {
+       "key": "hf_nyha", "type": "History", "buttonType": "scale",
+       "safe": "no functional limitation", "unsafe": "NYHA class",
+       "options": [
+         { "value": "I", "label": "I — no limitation" },
+         { "value": "II", "label": "II — slight limitation" },
+         { "value": "III", "label": "III — marked limitation" },
+         { "value": "IV", "label": "IV — symptoms at rest" }
+       ]
+     }
+     \`\`\`
+     The renderer prints "{unsafe} {label}" on its own line in the report (e.g. "NYHA class III — marked limitation."). Don't use scale for things that aren't actual validated clinical scores — prefer tertiary or severity for ad-hoc gradients.
    - **Default to tertiary unless there is a clear reason.** Don't proliferate button types.
 
    **For severity / duration / pain-scale buttons** — the \`unsafe\` label must be the **finding itself**, not a meta-description. The renderer adds the qualifier in parentheses:
@@ -7434,6 +7553,24 @@ Produce a revised checklist that addresses the critique. Return the full feature
             warnings.push(`${where}: unsafe label "${f.unsafe}" contains a meta-word. For ${f.buttonType} buttons the label should be the finding itself (e.g. "headache" not "headache severity").`);
           }
         }
+        if (f.buttonType === 'scale') {
+          if (!Array.isArray(f.options) || f.options.length < 2) {
+            errors.push(`${where}: scale button must have at least 2 options. Got ${(f.options || []).length}.`);
+          } else if (f.options.length > 10) {
+            warnings.push(`${where}: scale has ${f.options.length} options — consider whether a shorter list would be easier to use.`);
+          } else {
+            const seenValues = new Set();
+            f.options.forEach((opt, i) => {
+              if (!opt || typeof opt !== 'object') {
+                errors.push(`${where}: scale option ${i + 1} is malformed.`);
+                return;
+              }
+              if (!opt.value) errors.push(`${where}: scale option ${i + 1} has empty value.`);
+              if (seenValues.has(opt.value)) errors.push(`${where}: scale option value "${opt.value}" is duplicated.`);
+              seenValues.add(opt.value);
+            });
+          }
+        }
         if (f.safe.length > 60) warnings.push(`${where}: safe label is ${f.safe.length} chars — consider splitting.`);
         if (f.unsafe.length > 60) warnings.push(`${where}: unsafe label is ${f.unsafe.length} chars — consider splitting.`);
         if (!['History', 'Examination', 'Investigation', 'Differential', 'Differential Diagnosis'].includes(f.type)) {
@@ -7542,6 +7679,13 @@ Produce a revised checklist that addresses the critique. Return the full feature
         if (f.comment) out.comment = f.comment;
         if (f.reportSection) out.reportSection = f.reportSection;
         if (f.examSystem) out.examSystem = f.examSystem;
+        // Preserve scale-button options if present
+        if (Array.isArray(f.options) && f.options.length > 0) {
+          out.options = f.options.map(o => ({
+            value: String(o.value || ''),
+            label: String(o.label || o.value || '')
+          })).filter(o => o.value);
+        }
         return out;
       });
 
@@ -7807,6 +7951,47 @@ Produce a revised checklist that addresses the critique. Return the full feature
       
       saveCustomizationsSilent();
       render();
+    };
+
+    // Parse the scale-options textarea into [{ value, label }, ...]
+    // Format: each line is `value | label`. If label omitted, value is used as label.
+    // Lines without a value (whitespace-only or starting with `|`) are skipped.
+    window.changeScaleOptions = function(presentation, idx, optionsText) {
+      const lines = (optionsText || '').split('\n');
+      const options = [];
+      lines.forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        const parts = trimmed.split('|').map(p => p.trim());
+        const value = parts[0];
+        if (!value) return;
+        const label = parts[1] || value;
+        options.push({ value, label });
+      });
+
+      if (!userPreferences.customizations.presentations[presentation]) {
+        userPreferences.customizations.presentations[presentation] = {
+          features: MASTER_FEATURES[presentation].map(f => ({
+            ...f, visible: true, redFlag: f.redFlag || false,
+            type: f.type || 'History', buttonType: f.buttonType || 'tertiary'
+          })),
+          customFeatures: []
+        };
+      }
+
+      const customization = userPreferences.customizations.presentations[presentation];
+      const numRegularFeatures = customization.features.length;
+
+      if (idx < numRegularFeatures) {
+        customization.features[idx].options = options;
+      } else {
+        const customIdx = idx - numRegularFeatures;
+        customization.customFeatures[customIdx].options = options;
+      }
+
+      // Don't re-render (would lose textarea focus); just save in background.
+      // The next render after the user clicks elsewhere will pick up the new state.
+      saveCustomizationsSilent();
     };
 
     window.changeExamSystem = function(presentation, idx, newExamSystem) {
@@ -9113,11 +9298,21 @@ Produce a revised checklist that addresses the critique. Return the full feature
       });
 
       const renderFeatureChip = (f) => {
-        const labels = `${escapeHtml(f.safe || '?')} / ${escapeHtml(f.unsafe || '?')}`;
         const flag = f.redFlag ? '<span class="text-red-600 font-bold ml-1" title="Red flag">▶</span>' : '';
         const btnTypeBadge = (f.buttonType && f.buttonType !== 'tertiary')
           ? `<span class="text-xs bg-purple-100 text-purple-800 px-1 rounded ml-1">${escapeHtml(f.buttonType)}</span>`
           : '';
+
+        // Scale buttons: show the option labels rather than safe/unsafe (which are
+        // less meaningful for scales). E.g. "NYHA class — I, II, III, IV"
+        let labels;
+        if (f.buttonType === 'scale' && Array.isArray(f.options) && f.options.length > 0) {
+          const optStr = f.options.map(o => escapeHtml(o.label || o.value)).join(', ');
+          labels = `${escapeHtml(f.unsafe || '?')} — ${optStr}`;
+        } else {
+          labels = `${escapeHtml(f.safe || '?')} / ${escapeHtml(f.unsafe || '?')}`;
+        }
+
         return `<div class="bg-white border border-gray-200 rounded px-2 py-1 text-xs">
           <span class="text-gray-500">${escapeHtml(f.key || '')}</span> — ${labels}${flag}${btnTypeBadge}
         </div>`;
