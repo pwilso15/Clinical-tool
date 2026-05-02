@@ -5933,7 +5933,7 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                           <div class="flex-1 text-sm">
                             <span class="font-medium">🧪 Tested build</span>
                             <span class="text-xs text-gray-500">— ~60–90s, iterative</span>
-                            <p class="text-xs text-gray-600 mt-0.5">AI generates checklist, creates 5 case studies, tests checklist against each, revises to fill gaps. Up to 2 revisions.</p>
+                            <p class="text-xs text-gray-600 mt-0.5">AI generates checklist, creates 5 case studies, tests checklist against each, revises to fill gaps. Up to 3 revisions.</p>
                           </div>
                         </label>
                       </div>
@@ -6075,6 +6075,9 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                       <p class="font-semibold">✓ AI processing complete${aiBuilderState.buildMode === 'tested' ? ` (Tested build, ${aiBuilderState.testedIteration + 1} iteration${aiBuilderState.testedIteration > 0 ? 's' : ''})` : ''}</p>
                       <p class="text-xs">${aiBuilderState.generatedJson?.features?.length || 0} features generated. Review the structured summary and JSON below before importing.</p>
                     </div>
+
+                    <!-- Validation status panel -->
+                    ${renderValidationStatusPanel(aiBuilderState.generatedJson?.features || [])}
 
                     <!-- Block-grouped feature summary -->
                     ${renderFeatureSummaryBlocks(aiBuilderState.generatedJson?.features || [])}
@@ -7147,17 +7150,67 @@ Critique the checklist. Identify gaps, redundancies, and improvements.`;
 # REVISION TASK
 
 You are revising an existing checklist based on a critique. The critique identifies:
-- criticalGaps: ADD features for these
+- criticalGaps: ADD features for these (these are non-negotiable)
 - minorGaps: optionally add features for these (only if you have spare capacity in the 25-30 feature budget)
 - removalCandidates: REMOVE these features (their keys are listed)
 - improvements: MODIFY these features (their keys are listed)
 
-Preserve all features not mentioned in the critique. Keep the existing keys and reportSection/examSystem tags consistent.
+Preserve all features not mentioned in the critique. Keep existing keys and reportSection/examSystem tags consistent.
 
-Return the FULL revised feature list, not just the changes. Same JSON shape as the original checklist.`;
+Return the FULL revised feature list, not just the changes. Same JSON shape as the original checklist.
 
-      const critiqueText = `CRITICAL GAPS to address (must add features):
-${(critique.aggregate.criticalGaps || []).map(g => `- ${g.description}: ${g.rationale}`).join('\n') || '(none)'}
+## Common revision patterns — handle these correctly
+
+When the critique flags one of these patterns, follow the correction precisely:
+
+**1. "Convert binary to graded scale" or "needs severity grading":**
+- If the gradient is mild/moderate/severe → use buttonType: "severity", set safe: "None", unsafe: "<finding>"
+- If a named clinical scale (NYHA, mMRC, Killip, ASA, CCS) → use buttonType: "scale" AND **MUST include options array**:
+  \`\`\`json
+  {
+    "key": "...", "type": "...", "buttonType": "scale",
+    "safe": "...", "unsafe": "<scale name>",
+    "options": [
+      { "value": "I", "label": "I — description" },
+      { "value": "II", "label": "II — description" },
+      ...
+    ]
+  }
+  \`\`\`
+- If unsure which gradient applies, default to severity with mild/moderate/severe rather than scale
+- **NEVER set buttonType: "scale" without including a fully populated options array. A scale feature with no options is broken and will be rejected by the validator.**
+
+**2. "STRUCTURAL: ... safe label is a positive description" or "not in 'no X' form":**
+The label is grammatically positive ("weight stable", "good adherence", "exercise regularly"). Rewrite both safe and unsafe in negation-first form:
+- ✗ safe: "good medication adherence", unsafe: "non-adherence"
+- ✓ safe: "no medication non-adherence", unsafe: "medication non-adherence"
+- ✗ safe: "weight stable", unsafe: "weight gain"
+- ✓ safe: "no rapid weight gain", unsafe: "rapid weight gain"
+- ✗ safe: "regular aerobic exercise", unsafe: "sedentary lifestyle"
+- ✓ safe: "no sedentary lifestyle", unsafe: "sedentary lifestyle"
+- ✗ safe: "alcohol intake within limits", unsafe: "excess alcohol"
+- ✓ safe: "no excess alcohol intake", unsafe: "alcohol intake exceeding two standard drinks daily"
+- ✗ safe: "dietary sodium <2g per day", unsafe: "high dietary sodium"
+- ✓ safe: "no high dietary sodium intake", unsafe: "high dietary sodium intake"
+
+The pattern: the unsafe label IS the abnormal finding (no leading "no"). The safe label is "no <unsafe>" or close to it. The renderer relies on this convention.
+
+**3. "STRUCTURAL: Differential safe label is empty":**
+For Differential Diagnosis features, set BOTH safe and unsafe to the same diagnosis name (e.g. safe: "Acute coronary syndrome", unsafe: "Acute coronary syndrome"). Never leave safe empty.
+
+**4. "STRUCTURAL: scale option missing value":**
+Each entry in the options array must have a non-empty value AND label. If you see this error, the options array on a scale feature is malformed.
+
+## What NOT to do
+
+- Do not change feature keys — keep them stable across iterations.
+- Do not introduce new buttonType: "scale" features without fully-populated options arrays.
+- Do not leave any History feature without a reportSection (use snake_case).
+- Do not leave any Examination feature without an examSystem (use one of: General, Cardiovascular, Respiratory, Abdominal, Neurological, Musculoskeletal).
+- Do not exceed 35 features total.`;
+
+      const critiqueText = `CRITICAL GAPS to address (every one must be addressed):
+${(critique.aggregate.criticalGaps || []).map(g => `- ${g.description}\n  Rationale: ${g.rationale}`).join('\n') || '(none)'}
 
 MINOR GAPS (add only if useful):
 ${(critique.aggregate.minorGaps || []).map(g => `- ${g.description}: ${g.rationale}`).join('\n') || '(none)'}
@@ -7165,7 +7218,7 @@ ${(critique.aggregate.minorGaps || []).map(g => `- ${g.description}: ${g.rationa
 REMOVE these features:
 ${(critique.aggregate.removalCandidates || []).map(r => `- key="${r.featureKey}": ${r.rationale}`).join('\n') || '(none)'}
 
-MODIFY these features:
+MODIFY these features (read each carefully and apply the specific correction):
 ${(critique.aggregate.improvements || []).map(i => `- key="${i.featureKey}": ${i.rationale}`).join('\n') || '(none)'}`;
 
       const currentJson = JSON.stringify({ features: currentChecklist }, null, 2);
@@ -7350,9 +7403,18 @@ Produce a revised checklist that addresses the critique. Return the full feature
         pushTestedProgress('Critique v1 against cases', 'running');
         let currentChecklist = v1.features;
         let critique = await critiqueChecklist(aiBuilderState.presentation, cases, currentChecklist);
+
+        // Validate v1 structurally and inject any errors / quality issues
+        // as critical gaps. Same mechanism as in the iteration loop below —
+        // ensures that if v1 already has half-converted scale features,
+        // missing labels, or positive-description issues, the iteration loop
+        // will see them and force them to be fixed.
+        const { errors: v1Errors, warnings: v1Warnings } = validateAIFeatureSet(currentChecklist);
+        injectValidationIntoCritique(critique, v1Errors, v1Warnings);
+
         const v1Critical = (critique.aggregate?.criticalGaps || []).length;
         const v1Minor = (critique.aggregate?.minorGaps || []).length;
-        setTestedProgressLast('done', `${v1Critical} critical gaps, ${v1Minor} minor`);
+        setTestedProgressLast('done', `${v1Critical} critical gaps (incl. ${v1Errors.length} structural), ${v1Minor} minor`);
         changeLog.push(`v1 critique: ${v1Critical} critical gap(s), ${v1Minor} minor. ${critique.summary || ''}`);
 
         if (testedBuildCancelled) throw new Error('Cancelled by user');
@@ -7360,7 +7422,46 @@ Produce a revised checklist that addresses the critique. Return the full feature
         // -----------------------------------------------------------------
         // STAGE 4 — Iterate (max 2 revisions)
         // -----------------------------------------------------------------
-        const MAX_REVISIONS = 2;
+        // Up to 3 revisions (v2, v3, v4). Empirically 2 wasn't enough for
+        // hard cases like Hypertension review where the AI repeatedly flagged
+        // the same gap (e.g. "needs graded BP severity") without fully fixing
+        // it. 3 gives more room to converge.
+        const MAX_REVISIONS = 3;
+
+        // Helper: inject structural validation problems into a critique as
+        // critical gaps. Forces the next revision iteration to fix them.
+        // Used during iteration only — Quick build doesn't run this loop.
+        // Promotes positive-description warnings to soft errors here so the
+        // AI is forced to fix labels like "weight stable" / "good adherence"
+        // that the renderer can't reliably handle.
+        function injectValidationIntoCritique(critique, vErrors, vWarnings) {
+          if (!critique.aggregate) critique.aggregate = {};
+          if (!Array.isArray(critique.aggregate.criticalGaps)) critique.aggregate.criticalGaps = [];
+
+          const promote = (msg) => {
+            // Try to extract the feature key for actionable feedback
+            const keyMatch = msg.match(/Feature \d+ \(([^)]+)\)/);
+            const featureKey = keyMatch ? keyMatch[1] : null;
+            critique.aggregate.criticalGaps.push({
+              description: `STRUCTURAL: ${msg}`,
+              rationale: featureKey
+                ? `Validator caught this in feature "${featureKey}". Must be fixed in next revision.`
+                : 'Structural validation issue — must be fixed.'
+            });
+          };
+
+          vErrors.forEach(promote);
+
+          // Promote positive-description warnings to soft errors during iteration
+          vWarnings.forEach(w => {
+            if (w.includes('positive description') ||
+                w.includes('not in "no X" form') ||
+                w.includes('Differential safe label is empty') ||
+                w.includes('scale option')) {
+              promote(w);
+            }
+          });
+        }
 
         for (let iter = 1; iter <= MAX_REVISIONS; iter++) {
           if (!critiqueHasCriticalGaps(critique)) {
@@ -7388,10 +7489,40 @@ Produce a revised checklist that addresses the critique. Return the full feature
 
           if (testedBuildCancelled) throw new Error('Cancelled by user');
 
+          // Validate the revision structurally. Any errors or quality warnings
+          // get fed forward into the next critique as critical gaps. This is
+          // the mechanism that catches things like:
+          //   - half-converted scale features (buttonType=scale, no options)
+          //   - missing safe/unsafe labels
+          //   - positive-description labels ("weight stable", "good adherence")
+          //   - polarity-swapped pairs
+          // Without this loop, the AI flags issues in critique but the
+          // revision stage may not actually fix them.
+          aiBuilderState.testedStage = `Stage 4 of 5 — Validating v${iter + 1} structurally…`;
+          pushTestedProgress(`Validate v${iter + 1}`, 'running');
+          const { errors: vErrors, warnings: vWarnings } = validateAIFeatureSet(currentChecklist);
+          const promotedWarnings = vWarnings.filter(w =>
+            w.includes('positive description') ||
+            w.includes('not in "no X" form') ||
+            w.includes('Differential safe label is empty') ||
+            w.includes('scale option')
+          );
+          setTestedProgressLast('done',
+            `${vErrors.length} structural error${vErrors.length === 1 ? '' : 's'}, ${promotedWarnings.length} quality issue${promotedWarnings.length === 1 ? '' : 's'}`
+          );
+          changeLog.push(`v${iter + 1} validation: ${vErrors.length} errors, ${promotedWarnings.length} quality issues to fix.`);
+
+          if (testedBuildCancelled) throw new Error('Cancelled by user');
+
           // Re-critique
-          aiBuilderState.testedStage = `Stage 4 of 5 — Re-testing v${iter + 1}…`;
+          aiBuilderState.testedStage = `Stage 4 of 5 — Re-testing v${iter + 1} against cases…`;
           pushTestedProgress(`Re-critique v${iter + 1}`, 'running');
           critique = await critiqueChecklist(aiBuilderState.presentation, cases, currentChecklist);
+
+          // Inject structural problems as critical gaps so the next revision
+          // is forced to address them.
+          injectValidationIntoCritique(critique, vErrors, vWarnings);
+
           const newCritical = (critique.aggregate?.criticalGaps || []).length;
           const newMinor = (critique.aggregate?.minorGaps || []).length;
           setTestedProgressLast('done', `${newCritical} critical gaps, ${newMinor} minor`);
@@ -9348,6 +9479,82 @@ Produce a revised checklist that addresses the critique. Return the full feature
           status.textContent = '✅ Patient data saved locally (auto-clears at midnight)';
         }, 500);
       }
+    }
+
+    // ============================================================================
+    // AI BUILDER REVIEW — validation status panel
+    // ============================================================================
+    //
+    // Shows whether the generated checklist passes validation. Three states:
+    //   - clean (green): no errors, no quality issues — safe to import
+    //   - quality issues (amber): no blocking errors, but stylistic issues
+    //     remain (positive-description labels, etc.). User can import but
+    //     should fix in Configure or accept the trade-off.
+    //   - errors (red): structural problems that will block import.
+    //
+    // Quality issues that survive Tested Build's iteration loop appear here
+    // so the user can see them and decide. Without this panel, they slip
+    // through silently and only appear when reading the rendered report.
+    function renderValidationStatusPanel(features) {
+      if (!features || features.length === 0) return '';
+
+      const escapeHtml = s => String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+      const { errors, warnings } = validateAIFeatureSet(features);
+
+      // Filter warnings to ones that affect render quality
+      const qualityWarnings = warnings.filter(w =>
+        w.includes('positive description') ||
+        w.includes('not in "no X" form') ||
+        w.includes('Differential safe label is empty') ||
+        w.includes('scale option') ||
+        w.includes('meta-word')
+      );
+      const otherWarnings = warnings.filter(w => !qualityWarnings.includes(w));
+
+      if (errors.length === 0 && qualityWarnings.length === 0) {
+        return `<div class="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-900">
+          ✓ Validation: clean. ${features.length} features pass all structural and quality checks.
+        </div>`;
+      }
+
+      const errorsHtml = errors.length > 0 ? `
+        <div class="mb-2">
+          <p class="font-semibold text-red-800">⛔ ${errors.length} structural error${errors.length === 1 ? '' : 's'} (must be fixed before import):</p>
+          <ul class="mt-1 ml-5 list-disc space-y-0.5">
+            ${errors.map(e => `<li class="text-red-800">${escapeHtml(e)}</li>`).join('')}
+          </ul>
+        </div>` : '';
+
+      const qualityHtml = qualityWarnings.length > 0 ? `
+        <div class="mb-2">
+          <p class="font-semibold text-amber-800">⚠️ ${qualityWarnings.length} quality issue${qualityWarnings.length === 1 ? '' : 's'} (will affect report readability):</p>
+          <ul class="mt-1 ml-5 list-disc space-y-0.5">
+            ${qualityWarnings.map(w => `<li class="text-amber-800">${escapeHtml(w)}</li>`).join('')}
+          </ul>
+          <p class="text-xs text-gray-600 mt-1 italic">
+            You can import anyway and fix these in the Configure modal, OR click ← Back and re-run Tested build to give the AI another chance.
+          </p>
+        </div>` : '';
+
+      const otherHtml = (otherWarnings.length > 0 && errors.length === 0 && qualityWarnings.length === 0) ? `
+        <details class="text-xs">
+          <summary class="cursor-pointer text-gray-600">${otherWarnings.length} minor warning${otherWarnings.length === 1 ? '' : 's'}</summary>
+          <ul class="mt-1 ml-5 list-disc">
+            ${otherWarnings.map(w => `<li class="text-gray-600">${escapeHtml(w)}</li>`).join('')}
+          </ul>
+        </details>` : '';
+
+      const colour = errors.length > 0 ? 'red-50 border-red-300' : 'amber-50 border-amber-300';
+      return `
+        <div class="bg-${errors.length > 0 ? 'red' : 'amber'}-50 border border-${errors.length > 0 ? 'red' : 'amber'}-300 rounded p-3 text-sm">
+          ${errorsHtml}
+          ${qualityHtml}
+          ${otherHtml}
+        </div>
+      `;
     }
 
     // ============================================================================
