@@ -7015,8 +7015,45 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
     //
     // Returns: parsed JSON object.
     async function callClaudeForJson(systemPrompt, userMessage, { maxTokens = 8000, stageName = 'AI call' } = {}) {
-      if (testedBuildCancelled) throw new Error('Cancelled by user');
+      // Wrapper: retry once on transient network errors. iOS Safari/Chrome
+      // throws TypeError "Load failed" when the OS interrupts a fetch (memory
+      // pressure, screen lock, tab backgrounding). One retry recovers in most
+      // cases without any user-visible delay on the happy path.
+      const MAX_ATTEMPTS = 2;
+      let lastErr = null;
 
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          if (testedBuildCancelled) throw new Error('Cancelled by user');
+          return await callClaudeForJsonOnce(systemPrompt, userMessage, { maxTokens, stageName });
+        } catch (err) {
+          lastErr = err;
+
+          // Don't retry user-cancelled or non-transient failures
+          const msg = (err.message || '').toLowerCase();
+          const isTransient =
+            msg.includes('load failed') ||              // iOS Safari generic
+            msg.includes('network') ||                  // Chrome/iOS network err
+            msg.includes('failed to fetch') ||          // Chrome desktop
+            msg.includes('the operation') ||            // Safari "operation couldn't be completed"
+            err.name === 'TypeError';                   // Generic browser network err
+
+          const isLastAttempt = (attempt === MAX_ATTEMPTS);
+          const isCancellation = msg.includes('cancelled');
+
+          if (isLastAttempt || !isTransient || isCancellation) {
+            throw err;
+          }
+
+          console.warn(`[${stageName}] attempt ${attempt} failed (${err.message}). Retrying in 2s…`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+      throw lastErr;
+    }
+
+    // Underlying single-attempt call — does the actual work.
+    async function callClaudeForJsonOnce(systemPrompt, userMessage, { maxTokens, stageName }) {
       if (!WORKER_URL) {
         throw new Error('No worker configured. Use Manual mode instead.');
       }
@@ -7429,6 +7466,20 @@ Produce a revised checklist that addresses the critique. Return the full feature
       aiBuilderState.generatedJsonText = '';
       render();
 
+      // Acquire wake lock to keep the screen on during the long pipeline.
+      // iOS will otherwise suspend the page when the screen sleeps, killing
+      // in-flight fetches and producing "Load failed" errors. Best-effort —
+      // not all browsers support it, and that's fine.
+      let wakeLock = null;
+      if (navigator.wakeLock && typeof navigator.wakeLock.request === 'function') {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          console.log('[Tested build] wake lock acquired');
+        } catch (wakeErr) {
+          console.warn('[Tested build] wake lock unavailable:', wakeErr.message);
+        }
+      }
+
       // Track changes across iterations for the user-facing change log
       const changeLog = [];
 
@@ -7436,8 +7487,25 @@ Produce a revised checklist that addresses the critique. Return the full feature
       const abortWith = (err) => {
         console.error('Tested build error:', err);
         aiBuilderState.step = 'paste';
+
+        const msg = (err.message || '').toLowerCase();
+        const isIOSLoadFailed =
+          msg.includes('load failed') ||
+          msg.includes('the operation couldn');
+
+        let preamble;
+        if (isIOSLoadFailed) {
+          preamble = `Tested build failed: ${err.message}\n\n` +
+            `This usually happens on iPhone when the screen sleeps or another ` +
+            `app interrupts the network during the pipeline (which takes ~60–90s). ` +
+            `Try again on iPhone keeping the screen tapped occasionally, or ` +
+            `run Tested Build on iMac/desktop where it's more reliable.\n\n`;
+        } else {
+          preamble = `Tested build failed: ${err.message}\n\n`;
+        }
+
         aiBuilderState.errorMessage =
-          `Tested build failed: ${err.message || err}\n\n` +
+          preamble +
           (aiBuilderState.generatedJson
             ? 'A partial checklist was generated and is available — switch to Quick build mode and click Process to retry, or use Manual mode.'
             : 'No checklist was generated. Try again or switch to Quick build mode.');
@@ -7655,6 +7723,11 @@ Produce a revised checklist that addresses the critique. Return the full feature
         }
       } finally {
         testedBuildCancelled = false;
+        // Release the wake lock so the screen can sleep normally again.
+        if (wakeLock) {
+          try { await wakeLock.release(); console.log('[Tested build] wake lock released'); }
+          catch (e) { /* ignore */ }
+        }
       }
     };
 
