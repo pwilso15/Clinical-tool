@@ -5384,6 +5384,16 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                 title="Generate prompt to check completeness with OpenEvidence">
                                 🔬 Check
                               </button>
+                              <button onclick="event.stopPropagation(); downloadPresentationAsText('${presentation}')"
+                                class="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium"
+                                title="Download features as plain text — edit and re-upload">
+                                ⬇ Download
+                              </button>
+                              <button onclick="event.stopPropagation(); openTextUploadModal('${presentation}')"
+                                class="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium"
+                                title="Upload edited text file to update features">
+                                ⬆ Upload
+                              </button>
                               <button onclick="event.stopPropagation(); openAIBuilderModal('${presentation}')" 
                                 class="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 font-medium"
                                 title="Build clean JSON from OpenEvidence review using AI">
@@ -5529,6 +5539,16 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                                 class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
                                 title="Generate prompt to check completeness with OpenEvidence">
                                 🔬 Check
+                              </button>
+                              <button onclick="event.stopPropagation(); downloadPresentationAsText('${customPres.name}')"
+                                class="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium"
+                                title="Download features as plain text">
+                                ⬇ Download
+                              </button>
+                              <button onclick="event.stopPropagation(); openTextUploadModal('${customPres.name}')"
+                                class="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium"
+                                title="Upload edited text file">
+                                ⬆ Upload
                               </button>
                               <button onclick="event.stopPropagation(); openAIBuilderModal('${customPres.name}')" 
                                 class="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 font-medium"
@@ -6024,6 +6044,112 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                     ➕ Add Feature
                   </button>
                   <button onclick="closeAddFeatureModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- Text Upload Modal: paste or upload edited text file -->
+            ${textUploadState.open ? `
+            <div class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-gray-700 to-gray-900 text-white p-4 rounded-t-lg flex items-center justify-between">
+                  <div>
+                    <h2 class="text-lg font-bold">⬆ Upload Features from Text</h2>
+                    <p class="text-xs opacity-90">${textUploadState.presentation} — Paste edited text or choose a file</p>
+                  </div>
+                  <button onclick="closeTextUploadModal()" class="text-white hover:bg-white hover:bg-opacity-20 rounded p-2">✕</button>
+                </div>
+
+                <!-- Body -->
+                <div class="p-4 overflow-y-auto flex-1 space-y-3">
+
+                  <div class="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900">
+                    <p class="font-semibold mb-1">Format quick reference</p>
+                    <p class="mb-2"><strong>Simple format</strong> — write the unsafe finding, one per line. The "no" is added automatically for the safe state.</p>
+                    <pre class="bg-white p-2 rounded border border-blue-200 text-xs overflow-x-auto">## history: symptoms
+chest pain
+shortness of breath
+*syncope                          ← prefix * for red flag
+> Triggers cardiac investigation  ← &quot;&gt; ...&quot; lines attach as a tooltip comment to the previous feature
+
+## history: functional_class
+NYHA I | NYHA II | NYHA III | NYHA IV   ← pipe-separated = multivalent scale
+
+## examination: cardiovascular
+JVP elevated
+S3 gallop
+
+## investigation
+BNP elevated
+
+## differential
+Acute heart failure
+Pulmonary embolism</pre>
+                    <p class="mt-2"><strong>Detailed format</strong> — used automatically for features with custom safe labels (e.g. "no smoking" / "current smoker") or non-default button types. You can edit these lines too.</p>
+                    <p class="mt-2 text-xs">Lines starting with <code>#</code> are comments. Use <strong>⬇ Download</strong> on a presentation to see its features in this format.</p>
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Choose file:</label>
+                    <input type="file" accept=".txt,text/plain"
+                      onchange="handleTextFileUpload(this)"
+                      class="block w-full text-sm">
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Or paste contents:</label>
+                    <textarea
+                      oninput="handleTextPaste(this)"
+                      placeholder="Paste edited text here..."
+                      class="w-full px-3 py-2 border rounded text-xs font-mono"
+                      rows="10">${textUploadState.text || ''}</textarea>
+                  </div>
+
+                  ${textUploadState.parseResult ? `
+                  <div class="bg-gray-50 border rounded p-3 text-xs">
+                    <p class="font-semibold mb-2">📋 Parse result: ${textUploadState.parseResult.features.length} feature${textUploadState.parseResult.features.length === 1 ? '' : 's'}</p>
+                    ${textUploadState.parseResult.errors.length > 0 ? `
+                    <div class="mb-2">
+                      <p class="font-semibold text-red-800 mb-1">⛔ ${textUploadState.parseResult.errors.length} error${textUploadState.parseResult.errors.length === 1 ? '' : 's'} (must be fixed):</p>
+                      <ul class="ml-5 list-disc text-red-800 space-y-0.5">
+                        ${textUploadState.parseResult.errors.map(e => `<li>${e.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</li>`).join('')}
+                      </ul>
+                    </div>
+                    ` : ''}
+                    ${textUploadState.parseResult.warnings.length > 0 ? `
+                    <details>
+                      <summary class="cursor-pointer text-amber-800">⚠️ ${textUploadState.parseResult.warnings.length} warning${textUploadState.parseResult.warnings.length === 1 ? '' : 's'}</summary>
+                      <ul class="ml-5 list-disc text-amber-800 space-y-0.5 mt-1">
+                        ${textUploadState.parseResult.warnings.map(w => `<li>${w.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</li>`).join('')}
+                      </ul>
+                    </details>
+                    ` : ''}
+                    ${textUploadState.parseResult.errors.length === 0 ? `
+                    <p class="text-green-700 mt-1">✓ Ready to import.</p>
+                    ` : ''}
+                  </div>
+                  ` : ''}
+
+                </div>
+
+                <!-- Footer buttons -->
+                <div class="border-t p-4 flex gap-2 bg-gray-50 rounded-b-lg">
+                  <button onclick="textUploadState.replaceMode=false; applyTextUpload()"
+                    ${(!textUploadState.parseResult || textUploadState.parseResult.errors.length > 0) ? 'disabled' : ''}
+                    class="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded font-bold">
+                    ✓ Merge with existing
+                  </button>
+                  <button onclick="textUploadState.replaceMode=true; if(confirm('Replace ALL existing features with the uploaded ones? Existing features not in the uploaded file will be deleted.')) applyTextUpload()"
+                    ${(!textUploadState.parseResult || textUploadState.parseResult.errors.length > 0) ? 'disabled' : ''}
+                    class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded font-bold">
+                    ⚠️ Replace all
+                  </button>
+                  <button onclick="closeTextUploadModal()"
+                    class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded">
                     Cancel
                   </button>
                 </div>
@@ -7031,6 +7157,664 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       }
       return allFeatures.filter(f => f != null);
     }
+
+    // ========================================================================
+    // TEXT FILE ROUND-TRIP (download / upload)
+    // ========================================================================
+    //
+    // Goal: let the user download a presentation's features as a plain text
+    // file (one feature per line, pipe-delimited), edit in any text editor,
+    // and re-upload to update the presentation. Editing JSON by hand is
+    // miserable; this format is designed to be human-friendly.
+    //
+    // Format (per data line):
+    //   type | key | safe | unsafe | section | buttonType | redFlag | comment
+    // - section means reportSection (for History) or examSystem (for Examination)
+    // - buttonType: tertiary, binary, severity, duration, pain-scale, scale
+    // - redFlag: yes/true/no/false (or blank, treated as no)
+    // - Lines starting with # are comments. Inline `# comment` after data is stripped.
+    // - Trailing pipes can be omitted (empty fields ok).
+    // - Blank lines ignored.
+
+    const TEXT_FORMAT_HEADER = `# CLINICAL ASSESSMENT TOOL — feature list
+#
+# Two formats supported, mix freely:
+#
+# SIMPLE format — just write the unsafe finding, one per line:
+#   chest pain
+#   shortness of breath
+# The "no" is added automatically for the safe state.
+#
+# Multivalent (e.g. NYHA class) — pipe-separate values on one line:
+#   NYHA I | NYHA II | NYHA III | NYHA IV
+#
+# Section headings set the type and group:
+#   ## history: symptoms              (sets reportSection to "symptoms")
+#   ## examination: cardiovascular    (sets examSystem to "Cardiovascular")
+#   ## investigation                  (no section needed)
+#   ## differential                   (diagnoses, both safe and unsafe = name)
+#
+# DETAILED format — full control, all 8 fields pipe-delimited (used for
+# features with red flags, comments, custom keys, or non-tertiary button
+# types other than scale):
+#   History | bp_control | no uncontrolled BP | uncontrolled BP | bp_management | binary | yes | LR+ 4.2 for end-organ damage
+#
+# Lines starting with # are comments. Trailing # comments after data are stripped.
+# Blank lines are ignored.
+#
+# ========================================================================
+
+`;
+
+    function featuresToText(presentation, features) {
+      const lines = [TEXT_FORMAT_HEADER, `# Presentation: ${presentation}`, `# Total features: ${features.length}`, ''];
+
+      // Decide whether a feature can be expressed in simple format. Simple
+      // format supports:
+      //   - tertiary buttons with auto-generated "no <unsafe>" safe labels
+      //   - scale buttons with options arrays
+      //   - redFlag — emitted as "*" prefix on the line
+      //   - comment — emitted as "> ..." on the next line
+      //
+      // Simple format CANNOT express:
+      //   - non-default safe labels (e.g. "no smoking" for unsafe "current smoker")
+      //   - binary, severity, duration, pain-scale buttonTypes
+      //   - features that need a specific custom key (rare in practice — most
+      //     keys are auto-generatable from the unsafe label)
+      //
+      // For features that don't fit, emit detailed format with a leading
+      // comment explaining why.
+      const isSimpleExpressible = (f) => {
+        const bt = f.buttonType || 'tertiary';
+
+        if (bt === 'tertiary') {
+          // The safe label must be exactly "no <unsafe>" (with optional whitespace)
+          const expectedSafe = `no ${(f.unsafe || '').trim()}`;
+          if ((f.safe || '').trim().toLowerCase() !== expectedSafe.toLowerCase()) return false;
+          return true;
+        }
+
+        if (bt === 'scale') {
+          if (!Array.isArray(f.options) || f.options.length < 2) return false;
+          return true;
+        }
+
+        // Differential: simple format supports if both safe and unsafe match
+        // (which they should for a properly-formed differential)
+        if (f.type === 'Differential Diagnosis' || f.type === 'Differential') {
+          if (bt !== 'tertiary' && bt !== undefined) return false;
+          if ((f.safe || '').trim() !== (f.unsafe || '').trim()) return false;
+          return true;
+        }
+
+        return false;  // binary, severity, duration, pain-scale need detailed format
+      };
+
+      const formatDetailedLine = (f) => {
+        const type = (f.type === 'Differential Diagnosis') ? 'Differential' : (f.type || 'History');
+        const escape = (s) => String(s ?? '').replace(/\|/g, '/');
+        let section = '';
+        if (f.type === 'History') section = escape(f.reportSection || '');
+        else if (f.type === 'Examination') section = escape(f.examSystem || '');
+        return [
+          type,
+          escape(f.key),
+          escape(f.safe),
+          escape(f.unsafe),
+          section,
+          escape(f.buttonType || 'tertiary'),
+          f.redFlag ? 'yes' : 'no',
+          escape(f.comment || '')
+        ].join(' | ');
+      };
+
+      const formatSimpleLines = (f) => {
+        const escape = (s) => String(s ?? '').replace(/\|/g, '/');
+        const out = [];
+        // Build the main line
+        let mainLine;
+        if (f.buttonType === 'scale' && Array.isArray(f.options)) {
+          mainLine = f.options.map(o => escape(o.label || o.value)).join(' | ');
+        } else if (f.type === 'Differential Diagnosis' || f.type === 'Differential') {
+          mainLine = escape(f.unsafe || f.safe || '');
+        } else {
+          mainLine = escape(f.unsafe || '');
+        }
+        // Prefix with * for redFlag
+        if (f.redFlag) mainLine = '*' + mainLine;
+        out.push(mainLine);
+        // Append comment as a "> " line if present
+        if (f.comment) {
+          out.push(`> ${escape(f.comment)}`);
+        }
+        return out;
+      };
+
+      // Group features by type+section so each group gets one heading
+      const groups = [];
+      const groupIndex = {};
+
+      features.forEach(f => {
+        let type = f.type || 'History';
+        if (type === 'Differential') type = 'Differential Diagnosis';
+
+        let section = '';
+        if (type === 'History') section = f.reportSection || '';
+        else if (type === 'Examination') section = f.examSystem || '';
+
+        const groupKey = `${type}::${section}`;
+        if (!(groupKey in groupIndex)) {
+          groupIndex[groupKey] = groups.length;
+          groups.push({ type, section, items: [] });
+        }
+        groups[groupIndex[groupKey]].items.push(f);
+      });
+
+      groups.forEach(group => {
+        let heading;
+        if (group.type === 'History') {
+          heading = group.section ? `## history: ${group.section}` : `## history`;
+        } else if (group.type === 'Examination') {
+          heading = group.section ? `## examination: ${group.section}` : `## examination`;
+        } else if (group.type === 'Investigation') {
+          heading = `## investigation`;
+        } else if (group.type === 'Differential Diagnosis') {
+          heading = `## differential`;
+        } else {
+          heading = `## ${group.type.toLowerCase()}`;
+        }
+        lines.push(heading);
+
+        group.items.forEach(f => {
+          if (isSimpleExpressible(f)) {
+            formatSimpleLines(f).forEach(l => lines.push(l));
+          } else {
+            // Use detailed format. Add a leading comment explaining why so the
+            // user knows to preserve it on edit.
+            const reasons = [];
+            if (f.buttonType && f.buttonType !== 'tertiary' && f.buttonType !== 'scale') {
+              reasons.push(`buttonType=${f.buttonType}`);
+            }
+            const expectedSafe = `no ${(f.unsafe || '').trim()}`;
+            if ((f.buttonType || 'tertiary') === 'tertiary' &&
+                (f.safe || '').trim().toLowerCase() !== expectedSafe.toLowerCase()) {
+              reasons.push('custom safe label');
+            }
+            if (f.buttonType === 'scale' && (!Array.isArray(f.options) || f.options.length < 2)) {
+              reasons.push('scale missing options');
+            }
+            if (reasons.length > 0) {
+              lines.push(`# ↓ detailed format (${reasons.join(', ')})`);
+            }
+            lines.push(formatDetailedLine(f));
+          }
+        });
+        lines.push('');
+      });
+
+      return lines.join('\n');
+    }
+
+    // Parse text content into a features array. Supports two formats on the
+    // same input — auto-detected per line:
+    //
+    //   SIMPLE format (one or more values per line):
+    //     chest pain                       → tertiary, safe="no chest pain", unsafe="chest pain"
+    //     NYHA I | NYHA II | NYHA III      → scale buttonType, options from each value
+    //
+    //   DETAILED format (line begins with a valid type word):
+    //     History | bp_control | no... | ... | bp_management | binary | no |
+    //
+    // SECTION HEADINGS (## prefix) set the type and section for SIMPLE-format
+    // lines that follow. Detailed lines override per-line. Examples:
+    //   ## history: pain_character
+    //   ## examination: cardiovascular
+    //   ## investigation
+    //   ## differential
+    //
+    // Single # is a comment (full line or trailing). Blank lines ignored.
+    //
+    // Returns { features, errors, warnings }.
+    function parseTextToFeatures(text) {
+      const features = [];
+      const errors = [];
+      const warnings = [];
+
+      const lines = text.split('\n');
+      const validTypes = new Set(['History', 'Examination', 'Investigation', 'Differential', 'Differential Diagnosis']);
+      const validButtonTypes = new Set(['tertiary', 'binary', 'severity', 'duration', 'pain-scale', 'scale']);
+      const validExamSystems = ['General', 'Cardiovascular', 'Respiratory', 'Abdominal', 'Neurological', 'Musculoskeletal'];
+      const seenKeys = new Set();
+
+      // Heading state — applies to subsequent simple-format lines until reset
+      let currentType = 'History';
+      let currentSection = ''; // reportSection or examSystem depending on type
+
+      // Generate a unique snake_case key from a label
+      const generateKey = (label) => {
+        let base = label.toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 30);
+        if (!base) base = 'feature';
+        let key = base;
+        let counter = 1;
+        while (seenKeys.has(key)) {
+          key = `${base}_${counter}`;
+          counter++;
+        }
+        return key;
+      };
+
+      // Title-case a system name with proper capitalisation against the known list
+      const matchExamSystem = (input) => {
+        const lower = (input || '').trim().toLowerCase();
+        return validExamSystems.find(s => s.toLowerCase() === lower) || input;
+      };
+
+      // Parse a "## heading: value" line. Returns true if handled, false if not a heading.
+      const tryParseHeading = (line) => {
+        const m = line.match(/^##\s*(.+)$/);
+        if (!m) return false;
+        const content = m[1].trim();
+        // "type: value" form
+        const colonIdx = content.indexOf(':');
+        let typeWord, sectionWord;
+        if (colonIdx >= 0) {
+          typeWord = content.slice(0, colonIdx).trim().toLowerCase();
+          sectionWord = content.slice(colonIdx + 1).trim();
+        } else {
+          typeWord = content.trim().toLowerCase();
+          sectionWord = '';
+        }
+
+        if (typeWord === 'history' || typeWord.startsWith('hist')) {
+          currentType = 'History';
+          // Section becomes snake_case reportSection
+          currentSection = sectionWord
+            ? sectionWord.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+            : '';
+          return true;
+        }
+        if (typeWord === 'examination' || typeWord === 'exam') {
+          currentType = 'Examination';
+          // Section becomes a properly-cased examSystem
+          currentSection = sectionWord ? matchExamSystem(sectionWord) : '';
+          if (sectionWord && !validExamSystems.find(s => s.toLowerCase() === sectionWord.toLowerCase())) {
+            warnings.push(`Heading "${line.trim()}": "${sectionWord}" is not a standard exam system. Valid options: ${validExamSystems.join(', ')}.`);
+          }
+          return true;
+        }
+        if (typeWord === 'investigation' || typeWord === 'investigations') {
+          currentType = 'Investigation';
+          currentSection = '';
+          return true;
+        }
+        if (typeWord === 'differential' || typeWord === 'differential diagnosis' || typeWord === 'ddx') {
+          currentType = 'Differential Diagnosis';
+          currentSection = '';
+          return true;
+        }
+        // Not a recognised heading — treat as comment
+        return true; // still consume it as heading-style; don't error
+      };
+
+      // Detect detailed format: line starts with a valid type word followed by ` | `
+      const looksLikeDetailedFormat = (line) => {
+        // Must contain at least one pipe AND start with a valid type
+        if (!line.includes('|')) return false;
+        const firstField = line.split('|')[0].trim();
+        return validTypes.has(firstField);
+      };
+
+      // Parse a detailed-format line (legacy format)
+      const parseDetailedLine = (line, lineNum) => {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length < 4) {
+          errors.push(`Line ${lineNum}: detailed format needs at least type|key|safe|unsafe. Got: "${line}"`);
+          return null;
+        }
+        const [type, key, safe, unsafe, section, buttonType, redFlagStr, comment] = parts;
+        if (!validTypes.has(type)) {
+          errors.push(`Line ${lineNum}: invalid type "${type}".`);
+          return null;
+        }
+        if (!key) { errors.push(`Line ${lineNum}: missing key.`); return null; }
+        if (!/^[a-z][a-z0-9_]*$/i.test(key)) {
+          warnings.push(`Line ${lineNum}: key "${key}" should be snake_case.`);
+        }
+        if (seenKeys.has(key)) {
+          errors.push(`Line ${lineNum}: duplicate key "${key}".`);
+          return null;
+        }
+        seenKeys.add(key);
+
+        const normType = (type === 'Differential') ? 'Differential Diagnosis' : type;
+        let finalSafe = safe;
+        let finalUnsafe = unsafe;
+        if (normType === 'Differential Diagnosis') {
+          if (!finalSafe && finalUnsafe) finalSafe = finalUnsafe;
+          if (!finalUnsafe && finalSafe) finalUnsafe = finalSafe;
+        }
+        if (!finalSafe) errors.push(`Line ${lineNum} (${key}): missing safe label.`);
+        if (!finalUnsafe) errors.push(`Line ${lineNum} (${key}): missing unsafe label.`);
+
+        const bt = (buttonType || 'tertiary').toLowerCase();
+        if (buttonType && !validButtonTypes.has(bt)) {
+          warnings.push(`Line ${lineNum} (${key}): unknown buttonType "${buttonType}", defaulting to tertiary.`);
+        }
+        const rfRaw = (redFlagStr || '').toLowerCase().trim();
+        const redFlag = (rfRaw === 'yes' || rfRaw === 'true' || rfRaw === 'y' || rfRaw === '1');
+
+        const feature = {
+          key,
+          safe: finalSafe || '',
+          unsafe: finalUnsafe || '',
+          type: normType,
+          visible: true,
+          redFlag,
+          buttonType: validButtonTypes.has(bt) ? bt : 'tertiary'
+        };
+        if (comment) feature.comment = comment;
+        if (section) {
+          if (normType === 'History') feature.reportSection = section;
+          else if (normType === 'Examination') feature.examSystem = section;
+        }
+        return feature;
+      };
+
+      // Parse a simple-format line. Single value = tertiary; pipe-delimited = scale.
+      const parseSimpleLine = (line, lineNum) => {
+        // Detect leading "*" → redFlag for this feature
+        let redFlag = false;
+        if (line.startsWith('*')) {
+          redFlag = true;
+          line = line.slice(1).trim();
+        }
+
+        // Pipe-delimited values become scale options
+        const values = line.split('|').map(v => v.trim()).filter(v => v.length > 0);
+
+        if (values.length === 0) {
+          errors.push(`Line ${lineNum}: empty content.`);
+          return null;
+        }
+
+        if (values.length === 1) {
+          // Single value: tertiary button. unsafe = the label, safe = "no <label>"
+          const label = values[0];
+          const key = generateKey(label);
+          seenKeys.add(key);
+
+          // Build the safe label by prefixing "no " — but if the label already
+          // starts with "no " or "absent", don't double-prefix.
+          let safeLabel;
+          if (/^(no\s|absent|absence|none\b)/i.test(label)) {
+            safeLabel = label; // already negated — leave as-is and warn
+            warnings.push(`Line ${lineNum} (${key}): label "${label}" already negated. Using as-is for safe; consider using detailed format if you want different unsafe wording.`);
+          } else {
+            safeLabel = `no ${label}`;
+          }
+
+          const feature = {
+            key,
+            safe: safeLabel,
+            unsafe: label,
+            type: currentType,
+            visible: true,
+            redFlag,
+            buttonType: 'tertiary'
+          };
+          if (currentSection) {
+            if (currentType === 'History') feature.reportSection = currentSection;
+            else if (currentType === 'Examination') feature.examSystem = currentSection;
+          }
+
+          // Differentials need both safe and unsafe = label
+          if (currentType === 'Differential Diagnosis') {
+            feature.safe = label;
+            feature.unsafe = label;
+          }
+
+          return feature;
+        }
+
+        // Multiple values: scale button. Find common prefix to use as scale
+        // name (e.g. "NYHA " for ["NYHA I", "NYHA II", ...]). Use the prefix
+        // up to the last word boundary so option values are clean.
+        let commonPrefix = values[0];
+        for (let i = 1; i < values.length; i++) {
+          while (commonPrefix && !values[i].startsWith(commonPrefix)) {
+            commonPrefix = commonPrefix.slice(0, -1);
+          }
+          if (!commonPrefix) break;
+        }
+        if (commonPrefix) {
+          const lastSpace = commonPrefix.lastIndexOf(' ');
+          if (lastSpace >= 0) {
+            commonPrefix = commonPrefix.slice(0, lastSpace + 1);
+          } else {
+            commonPrefix = '';
+          }
+        }
+
+        const scaleName = (commonPrefix || '').trim() || 'scale';
+        const key = generateKey(scaleName);
+        seenKeys.add(key);
+
+        const options = values.map(v => {
+          let value = v;
+          if (commonPrefix && v.startsWith(commonPrefix)) {
+            value = v.slice(commonPrefix.length).trim();
+            if (!value) value = v;
+          }
+          return { value, label: v };
+        });
+
+        const feature = {
+          key,
+          safe: scaleName ? `${scaleName.toLowerCase()} not assessed` : 'not assessed',
+          unsafe: scaleName,
+          type: currentType,
+          visible: true,
+          redFlag,
+          buttonType: 'scale',
+          options
+        };
+        if (currentSection) {
+          if (currentType === 'History') feature.reportSection = currentSection;
+          else if (currentType === 'Examination') feature.examSystem = currentSection;
+        }
+        return feature;
+      };
+
+      // Main parse loop
+      lines.forEach((rawLine, idx) => {
+        const lineNum = idx + 1;
+
+        // Strip trailing inline comments (after a # that's not the start of ## heading)
+        let line = rawLine;
+        if (!line.trim().startsWith('#')) {
+          const hashIdx = line.indexOf('#');
+          if (hashIdx >= 0) line = line.slice(0, hashIdx);
+        }
+        line = line.trim();
+        if (!line) return;
+
+        // Heading?
+        if (line.startsWith('##')) {
+          tryParseHeading(line);
+          return;
+        }
+
+        // Single-# comment
+        if (line.startsWith('#')) return;
+
+        // "> " continuation line — attaches as a comment to the previous feature
+        if (line.startsWith('>')) {
+          const commentText = line.slice(1).trim();
+          if (features.length === 0) {
+            warnings.push(`Line ${lineNum}: "> ${commentText}" appears before any feature — ignored.`);
+            return;
+          }
+          const prev = features[features.length - 1];
+          // Append to existing comment if there is one
+          prev.comment = prev.comment ? `${prev.comment} ${commentText}` : commentText;
+          return;
+        }
+
+        // Detailed format?
+        if (looksLikeDetailedFormat(line)) {
+          const feat = parseDetailedLine(line, lineNum);
+          if (feat) features.push(feat);
+          return;
+        }
+
+        // Simple format
+        const feat = parseSimpleLine(line, lineNum);
+        if (feat) features.push(feat);
+      });
+
+      return { features, errors, warnings };
+    }
+
+    // Trigger a text file download in the browser
+    function downloadText(filename, content) {
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Release the object URL after the download starts
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    window.downloadPresentationAsText = function(presentation) {
+      const features = getCurrentFeaturesForPresentation(presentation);
+      if (!features || features.length === 0) {
+        alert(`No features to download for "${presentation}".`);
+        return;
+      }
+      const text = featuresToText(presentation, features);
+      const safeFilename = presentation.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+      downloadText(`cat_features_${safeFilename}.txt`, text);
+    };
+
+    // Text upload modal state — separate from AI Builder, simpler workflow
+    let textUploadState = {
+      open: false,
+      presentation: null,
+      text: '',
+      parseResult: null,  // { features, errors, warnings } from parseTextToFeatures
+      replaceMode: false  // false = merge with existing, true = replace all
+    };
+
+    window.openTextUploadModal = function(presentation) {
+      textUploadState = {
+        open: true,
+        presentation,
+        text: '',
+        parseResult: null,
+        replaceMode: false
+      };
+      render();
+    };
+
+    window.closeTextUploadModal = function() {
+      textUploadState.open = false;
+      render();
+    };
+
+    window.handleTextFileUpload = function(input) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        textUploadState.text = e.target.result || '';
+        textUploadState.parseResult = parseTextToFeatures(textUploadState.text);
+        render();
+      };
+      reader.onerror = function() {
+        alert('Failed to read file.');
+      };
+      reader.readAsText(file);
+    };
+
+    window.handleTextPaste = function(textareaEl) {
+      textUploadState.text = textareaEl.value;
+      textUploadState.parseResult = parseTextToFeatures(textUploadState.text);
+      render();
+    };
+
+    window.applyTextUpload = async function() {
+      const result = textUploadState.parseResult;
+      if (!result || result.errors.length > 0) {
+        alert('Cannot apply — fix the errors first.');
+        return;
+      }
+
+      const presentation = textUploadState.presentation;
+      const isBuiltIn = !!MASTER_FEATURES[presentation];
+      const features = result.features;
+      const replaceAll = textUploadState.replaceMode;
+
+      const merged = (() => {
+        if (isBuiltIn) {
+          if (replaceAll || !userPreferences.customizations.presentations[presentation]) {
+            return { features, customFeatures: [] };
+          }
+          const existing = userPreferences.customizations.presentations[presentation];
+          const existingKeys = new Set((existing.features || []).map(f => f.key));
+          const updated = (existing.features || []).map(f => {
+            const incoming = features.find(c => c.key === f.key);
+            return incoming || f;
+          });
+          features.forEach(c => { if (!existingKeys.has(c.key)) updated.push(c); });
+          return { ...existing, features: updated };
+        } else {
+          // Custom presentation
+          if (!userPreferences.customizations.customPresentations) {
+            userPreferences.customizations.customPresentations = [];
+          }
+          const idx = userPreferences.customizations.customPresentations.findIndex(cp => cp.name === presentation);
+          if (idx < 0) {
+            userPreferences.customizations.customPresentations.push({ name: presentation, features });
+            return null; // signal: handled inline
+          }
+          if (replaceAll) {
+            userPreferences.customizations.customPresentations[idx].features = features;
+          } else {
+            const existing = userPreferences.customizations.customPresentations[idx].features || [];
+            const existingKeys = new Set(existing.map(f => f.key));
+            const updated = existing.map(f => {
+              const incoming = features.find(c => c.key === f.key);
+              return incoming || f;
+            });
+            features.forEach(c => { if (!existingKeys.has(c.key)) updated.push(c); });
+            userPreferences.customizations.customPresentations[idx].features = updated;
+          }
+          return null;
+        }
+      })();
+
+      if (isBuiltIn && merged) {
+        userPreferences.customizations.presentations[presentation] = merged;
+      }
+
+      try {
+        await saveUserPreferences(userPreferences);
+        alert(`✓ ${presentation} updated. ${features.length} feature${features.length === 1 ? '' : 's'} processed (${replaceAll ? 'replaced all' : 'merged with existing'}).`);
+        textUploadState.open = false;
+        render();
+      } catch (err) {
+        alert(`Update saved locally but Supabase sync failed: ${err.message}\n\nYour changes are visible. They'll sync next time auth is fresh.`);
+        textUploadState.open = false;
+        render();
+      }
+    };
 
     window.openAIBuilderModal = function(presentation) {
       aiBuilderModalOpen = true;
