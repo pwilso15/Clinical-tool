@@ -7703,23 +7703,27 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
       downloadText(`cat_features_${safeFilename}.txt`, text);
     };
 
-    // Text upload modal state — separate from AI Builder, simpler workflow
-    let textUploadState = {
+    // Text upload modal state — separate from AI Builder, simpler workflow.
+    // Lives on window so inline onclick handlers (which run in global scope,
+    // not module scope) can read and mutate it. The module-scope identifier
+    // is just an alias for window.textUploadState.
+    window.textUploadState = {
       open: false,
       presentation: null,
       text: '',
       parseResult: null,  // { features, errors, warnings } from parseTextToFeatures
       replaceMode: false  // false = merge with existing, true = replace all
     };
+    let textUploadState = window.textUploadState;
 
     window.openTextUploadModal = function(presentation) {
-      textUploadState = {
-        open: true,
-        presentation,
-        text: '',
-        parseResult: null,
-        replaceMode: false
-      };
+      // Mutate properties on the shared object — don't reassign, so the
+      // window.textUploadState reference stays valid for onclick handlers.
+      textUploadState.open = true;
+      textUploadState.presentation = presentation;
+      textUploadState.text = '';
+      textUploadState.parseResult = null;
+      textUploadState.replaceMode = false;
       render();
     };
 
