@@ -6112,7 +6112,8 @@ shortness of breath
 > Triggers cardiac investigation  ← &quot;&gt; ...&quot; lines attach as a tooltip comment to the previous feature
 
 ## history: functional_class
-NYHA I | NYHA II | NYHA III | NYHA IV   ← pipe-separated = multivalent scale
+NYHA I | NYHA II | NYHA III | NYHA IV   ← shared prefix becomes scale name
+Pain location: Calf | Buttock | Thigh   ← or use "Name: opt | opt" for explicit naming
 
 ## examination: cardiovascular
 JVP elevated
@@ -7222,6 +7223,8 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
 #
 # Multivalent (e.g. NYHA class) — pipe-separate values on one line:
 #   NYHA I | NYHA II | NYHA III | NYHA IV
+# Or use "Name: opt | opt | opt" when options don't share a prefix:
+#   Pain location: Calf pain | Buttock pain | Thigh pain
 #
 # Section headings set the type and group:
 #   ## history: symptoms              (sets reportSection to "symptoms")
@@ -7309,7 +7312,26 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         // Build the main line
         let mainLine;
         if (f.buttonType === 'scale' && Array.isArray(f.options)) {
-          mainLine = f.options.map(o => escape(o.label || o.value)).join(' | ');
+          // Check if the scale name can be recovered from a common prefix of
+          // the option labels. If yes (e.g. "NYHA " for ["NYHA I", "NYHA II"]),
+          // emit as pipe-only; the parser will re-detect it.
+          // If no (e.g. name="Pain location" with options like "Calf pain"),
+          // emit with explicit colon-prefix to preserve the name on round-trip.
+          const scaleName = (f.unsafe || '').trim();
+          const labels = f.options.map(o => o.label || o.value);
+
+          let recoverable = false;
+          if (scaleName && labels.length > 1) {
+            // Recoverable if every label starts with the scale name followed by a space
+            const prefix = scaleName + ' ';
+            recoverable = labels.every(l => l.startsWith(prefix));
+          }
+
+          if (recoverable || !scaleName) {
+            mainLine = labels.map(escape).join(' | ');
+          } else {
+            mainLine = `${escape(scaleName)}: ${labels.map(escape).join(' | ')}`;
+          }
         } else if (f.type === 'Differential Diagnosis' || f.type === 'Differential') {
           mainLine = escape(f.unsafe || f.safe || '');
         } else {
@@ -7614,30 +7636,64 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           return feature;
         }
 
-        // Multiple values: scale button. Find common prefix to use as scale
-        // name (e.g. "NYHA " for ["NYHA I", "NYHA II", ...]). Use the prefix
-        // up to the last word boundary so option values are clean.
-        let commonPrefix = values[0];
-        for (let i = 1; i < values.length; i++) {
-          while (commonPrefix && !values[i].startsWith(commonPrefix)) {
-            commonPrefix = commonPrefix.slice(0, -1);
-          }
-          if (!commonPrefix) break;
-        }
-        if (commonPrefix) {
-          const lastSpace = commonPrefix.lastIndexOf(' ');
-          if (lastSpace >= 0) {
-            commonPrefix = commonPrefix.slice(0, lastSpace + 1);
-          } else {
-            commonPrefix = '';
+        // Multiple values: scale button. Two ways the scale name is determined:
+        //
+        // 1. Explicit colon-prefix: "Name: opt1 | opt2 | opt3" — text before
+        //    the first colon (in the first option only) becomes the scale name.
+        //    Useful when options don't share a common prefix:
+        //      Pain location: Calf pain | Buttock pain | Thigh pain
+        //
+        // 2. Fall-back common-prefix detection: if no colon-prefix, find the
+        //    longest shared prefix to use as the name:
+        //      NYHA I | NYHA II | NYHA III  → name "NYHA", values I/II/III
+        //
+        // If neither produces a meaningful name, falls back to "scale".
+        let scaleName = '';
+        let workingValues = values;
+
+        // Try colon-prefix first. Only valid if the first value contains a colon
+        // and there's actual content before it.
+        const firstColonIdx = values[0].indexOf(':');
+        if (firstColonIdx > 0) {
+          const candidateName = values[0].slice(0, firstColonIdx).trim();
+          const firstOptionRest = values[0].slice(firstColonIdx + 1).trim();
+          if (candidateName && firstOptionRest) {
+            scaleName = candidateName;
+            workingValues = [firstOptionRest, ...values.slice(1)];
           }
         }
 
-        const scaleName = (commonPrefix || '').trim() || 'scale';
+        // If no colon-prefix, try common-prefix detection
+        let commonPrefix = '';
+        if (!scaleName) {
+          commonPrefix = workingValues[0];
+          for (let i = 1; i < workingValues.length; i++) {
+            while (commonPrefix && !workingValues[i].startsWith(commonPrefix)) {
+              commonPrefix = commonPrefix.slice(0, -1);
+            }
+            if (!commonPrefix) break;
+          }
+          if (commonPrefix) {
+            const lastSpace = commonPrefix.lastIndexOf(' ');
+            if (lastSpace >= 0) {
+              commonPrefix = commonPrefix.slice(0, lastSpace + 1);
+            } else {
+              commonPrefix = '';
+            }
+          }
+          scaleName = (commonPrefix || '').trim();
+        }
+
+        // Final fallback if still no name
+        if (!scaleName) scaleName = 'scale';
+
         const key = generateKey(scaleName);
         seenKeys.add(key);
 
-        const options = values.map(v => {
+        // Build options. If commonPrefix detection was used, strip that prefix
+        // from each value to get clean short values (e.g. "NYHA I" → value "I").
+        // Otherwise use the full option text as both value and label.
+        const options = workingValues.map(v => {
           let value = v;
           if (commonPrefix && v.startsWith(commonPrefix)) {
             value = v.slice(commonPrefix.length).trim();
