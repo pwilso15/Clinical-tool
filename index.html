@@ -4889,12 +4889,33 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                 <div class="mt-4">
                   <h3 class="text-md font-bold text-gray-800 mb-2">📋 Review of Systems</h3>
                   <p class="text-xs text-gray-500 mb-3">Tap buttons to toggle: Grey (not asked) → Green (normal) → Red (abnormal) → Grey</p>
-                  ${ROS_SYSTEMS.map(([system, items]) => {
-                    const visibleItems = items.filter(([safe, unsafe]) => isItemVisible('ros', `ros_${safe}`));
-                    if (visibleItems.length === 0) return '';
-                    return `
+                  ${(() => {
+                    // Build the rendering order: canonical ROS_SYSTEMS first, then
+                    // any custom system names that don't match a canonical entry.
+                    // Each custom ROS item has a `system` property naming which
+                    // system it belongs to (canonical or new).
+                    const canonicalSystems = ROS_SYSTEMS.map(([sys]) => sys);
+                    const customItems = userPreferences.customizations.customROS || [];
+                    const customSystemsSeen = [];
+                    customItems.forEach(item => {
+                      if (item && item.system && !canonicalSystems.includes(item.system) && !customSystemsSeen.includes(item.system)) {
+                        customSystemsSeen.push(item.system);
+                      }
+                    });
+
+                    const renderSystemBlock = (systemName, canonicalItems) => {
+                      const visibleItems = canonicalItems
+                        ? canonicalItems.filter(([safe, unsafe]) => isItemVisible('ros', `ros_${safe}`))
+                        : [];
+                      const customForSystem = customItems.filter(item =>
+                        item && item.system === systemName && item.visible !== false
+                      );
+                      // Custom items without a system land in "Other" so the user still sees them
+                      if (visibleItems.length === 0 && customForSystem.length === 0) return '';
+
+                      return `
                     <div class="mb-4">
-                      <h4 class="text-sm font-bold text-gray-700 mb-2">${system}</h4>
+                      <h4 class="text-sm font-bold text-gray-700 mb-2">${systemName}</h4>
                       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         ${visibleItems.map(([safe, unsafe]) => {
                           const key = `ros_${safe}`;
@@ -4903,7 +4924,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                           const redFlagStyle = redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
                           const noteText = patientData.notes && patientData.notes[key];
                           const hasNote = !!noteText;
-                          // Get custom text if available
                           const custom = userPreferences.customizations.ros[key] || {};
                           const displaySafe = custom.safe || safe;
                           const displayUnsafe = custom.unsafe || unsafe;
@@ -4921,20 +4941,50 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                             </button>
                           `;
                         }).join('')}
+                        ${customForSystem.map(item => {
+                          const state = patientData.ros[item.key] || "null";
+                          const redFlagStyle = item.redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
+                          const noteText = patientData.notes && patientData.notes[item.key];
+                          const hasNote = !!noteText;
+                          return `
+                            <button 
+                              onclick="toggleROS('${item.key}')" 
+                              onmousedown="startLongPress('${item.key}', '${item.safe} / ${item.unsafe}')"
+                              onmouseup="cancelLongPress()"
+                              onmouseleave="cancelLongPress()"
+                              ontouchstart="startLongPress('${item.key}', '${item.safe} / ${item.unsafe}')"
+                              ontouchend="cancelLongPress()"
+                              class="${getButtonClass(state, hasNote)} ${redFlagStyle} border-indigo-300"
+                              title="${noteText || ''}">
+                              ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText)}
+                            </button>
+                          `;
+                        }).join('')}
                       </div>
                     </div>
-                    `;
-                  }).join('')}
-                  
-                  <!-- Custom ROS Items -->
-                  ${(() => {
-                    const customItems = (userPreferences.customizations.customROS || []).filter(item => item && item.visible !== false);
-                    if (customItems.length === 0) return '';
-                    return `
+                      `;
+                    };
+
+                    let out = '';
+                    // Canonical systems first (so the user's familiar layout is preserved)
+                    ROS_SYSTEMS.forEach(([systemName, items]) => {
+                      out += renderSystemBlock(systemName, items);
+                    });
+                    // Then any new custom systems they've added
+                    customSystemsSeen.forEach(systemName => {
+                      out += renderSystemBlock(systemName, null);
+                    });
+                    // Legacy fallback: custom items with no `system` set (created before this feature
+                    // existed) — render under "Other" so they aren't orphaned.
+                    const orphanItems = customItems.filter(item =>
+                      item && !item.system && item.visible !== false
+                    );
+                    if (orphanItems.length > 0) {
+                      out += `
                     <div class="mb-4 border-t-2 border-indigo-200 pt-4">
-                      <h4 class="text-sm font-bold text-indigo-700 mb-2">🎯 Custom ROS Items</h4>
+                      <h4 class="text-sm font-bold text-indigo-700 mb-2">Other (uncategorised custom items)</h4>
                       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        ${customItems.map(item => {
+                        ${orphanItems.map(item => {
                           const state = patientData.ros[item.key] || "null";
                           const redFlagStyle = item.redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
                           const noteText = patientData.notes && patientData.notes[item.key];
@@ -4955,7 +5005,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                         }).join('')}
                       </div>
                     </div>
-                    `;
+                      `;
+                    }
+                    return out;
                   })()}
                 </div>
 
@@ -5024,13 +5076,31 @@ What rare or uncommon diagnoses should be considered in the differential for thi
               ${!collapsedSections.examination ? `
               <div class="p-4">
                 <p class="text-xs text-gray-500 mb-3">Tap buttons to toggle: Grey (not examined) → Green (normal) → Red (abnormal) → Grey</p>
-              ${Object.entries(EXAM_SECTIONS).map(([section, buttons]) => {
-                const visibleButtons = buttons.filter(btn => isItemVisible('exam', btn.key));
-                const customButtons = (userPreferences.customizations.customExam || [])
-                  .filter(item => item && item.section === section && item.visible !== false);
-                
-                if (visibleButtons.length === 0 && customButtons.length === 0) return '';
-                return `
+              ${(() => {
+                // Build the list of sections to render: canonical EXAM_SECTIONS first,
+                // then any custom sections discovered in customExam items, in first-
+                // appearance order. This means custom systems like "ECG" or
+                // "Urinalysis" appear as their own sections instead of floating in
+                // a generic "Custom Exam Items" block.
+                const canonicalSections = Object.keys(EXAM_SECTIONS);
+                const customItems = userPreferences.customizations.customExam || [];
+                const customSectionsSeen = [];
+                customItems.forEach(item => {
+                  if (item && item.section && !canonicalSections.includes(item.section) && !customSectionsSeen.includes(item.section)) {
+                    customSectionsSeen.push(item.section);
+                  }
+                });
+                const allSections = [...canonicalSections, ...customSectionsSeen];
+
+                return allSections.map(section => {
+                  const isCanonical = canonicalSections.includes(section);
+                  const buttons = isCanonical ? EXAM_SECTIONS[section] : [];
+                  const visibleButtons = buttons.filter(btn => isItemVisible('exam', btn.key));
+                  const customButtons = (userPreferences.customizations.customExam || [])
+                    .filter(item => item && item.section === section && item.visible !== false);
+
+                  if (visibleButtons.length === 0 && customButtons.length === 0) return '';
+                  return `
                 <div class="mb-4">
                   <h3 class="text-sm font-bold text-gray-700 mb-2">${section}</h3>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -5080,7 +5150,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   </div>
                 </div>
                 `;
-              }).join('')}
+              }).join('');
+              })()}
               </div>
               ` : ''}
             </div>
@@ -10010,6 +10081,34 @@ Produce a revised checklist that addresses the critique. Return the full feature
     };
 
     window.addCustomROS = function() {
+      // Discover available ROS systems: canonical from ROS_SYSTEMS plus any
+      // custom systems the user has already created. Lets them pick from
+      // existing systems or type a new one.
+      const canonical = ROS_SYSTEMS.map(([sys]) => sys);
+      const existing = (userPreferences.customizations.customROS || [])
+        .map(item => item && item.system)
+        .filter(s => s && !canonical.includes(s));
+      const uniqueExisting = [...new Set(existing)];
+      const allSystems = [...canonical, ...uniqueExisting];
+
+      const systemPrompt = 'Which ROS system?\n\nExisting:\n' +
+        allSystems.map((s, i) => `${i + 1}. ${s}`).join('\n') +
+        `\n${allSystems.length + 1}. (Type a new system name)\n\nEnter number or system name:`;
+      const systemInput = prompt(systemPrompt, '1');
+      if (!systemInput) return;
+
+      let system;
+      const asNumber = parseInt(systemInput, 10);
+      if (!isNaN(asNumber) && asNumber >= 1 && asNumber <= allSystems.length) {
+        system = allSystems[asNumber - 1];
+      } else if (!isNaN(asNumber) && asNumber === allSystems.length + 1) {
+        system = prompt('Enter new system name (e.g., "Sleep", "Substance use"):');
+        if (!system) return;
+        system = system.trim();
+      } else {
+        system = systemInput.trim();
+      }
+
       const safe = prompt('Enter the "normal/negative" label (e.g., "No night sweats"):');
       if (!safe) return;
       const unsafe = prompt('Enter the "abnormal/positive" label (e.g., "Night sweats"):');
@@ -10022,26 +10121,50 @@ Produce a revised checklist that addresses the critique. Return the full feature
       const customKey = `custom_ros_${Date.now()}`;
       userPreferences.customizations.customROS.push({
         key: customKey,
+        system: system,
         safe: safe,
         unsafe: unsafe,
         visible: true,
         redFlag: false
       });
       
-      // Save to database
       saveCustomizationsSilent();
       render();
     };
 
     window.addCustomExam = function() {
+      // Discover available exam systems: canonical EXAM_SECTIONS plus any
+      // custom sections used by existing customExam items. Lets the user pick
+      // from existing systems or type a new one (e.g. ECG, Urinalysis, POCUS).
+      const canonical = Object.keys(EXAM_SECTIONS);
+      const existing = (userPreferences.customizations.customExam || [])
+        .map(item => item && item.section)
+        .filter(s => s && !canonical.includes(s));
+      const uniqueExisting = [...new Set(existing)];
+      const allSections = [...canonical, ...uniqueExisting];
+
+      const sectionPrompt = 'Which exam section?\n\n' +
+        allSections.map((s, i) => `${i + 1}. ${s}`).join('\n') +
+        `\n${allSections.length + 1}. (Type a new section name)\n\nEnter number or section name:`;
+      const sectionInput = prompt(sectionPrompt, '1');
+      if (!sectionInput) return;
+
+      let section;
+      const asNumber = parseInt(sectionInput, 10);
+      if (!isNaN(asNumber) && asNumber >= 1 && asNumber <= allSections.length) {
+        section = allSections[asNumber - 1];
+      } else if (!isNaN(asNumber) && asNumber === allSections.length + 1) {
+        section = prompt('Enter new section name (e.g., "ECG", "Urinalysis", "POCUS"):');
+        if (!section) return;
+        section = section.trim();
+      } else {
+        section = sectionInput.trim();
+      }
+
       const safe = prompt('Enter the "normal" finding (e.g., "No pericardial rub"):');
       if (!safe) return;
       const unsafe = prompt('Enter the "abnormal" finding (e.g., "Pericardial rub present"):');
       if (!unsafe) return;
-      
-      // Ask for section
-      const section = prompt('Enter examination section (General/Cardiovascular/Respiratory/Abdominal/Neurological/Musculoskeletal):', 'General');
-      if (!section) return;
       
       if (!userPreferences.customizations.customExam) {
         userPreferences.customizations.customExam = [];
@@ -10057,7 +10180,6 @@ Produce a revised checklist that addresses the critique. Return the full feature
         redFlag: false
       });
       
-      // Save to database
       saveCustomizationsSilent();
       render();
     };
