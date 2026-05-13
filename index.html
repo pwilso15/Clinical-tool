@@ -3556,13 +3556,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
       const mentionedItems = new Set(); // For deduplication against ROS
 
-      // Group history features by reportSection. Sections are discovered from the
-      // data — whatever reportSection values the AI used, we honour. They render
-      // in the order they first appear in the feature array, so the AI controls
-      // narrative flow by ordering the features it generates.
-      const groups = {};                  // { sectionKey: { positives: [], negatives: [] } }
+      // Group history features by reportSection. Each group collects three
+      // kinds of items: joined-positive findings, joined-negative findings,
+      // and "ownLine" items that render as standalone sentences. Within a
+      // section, ownLine items emit first (their full sentence reads naturally
+      // before the joined comma-list of related findings), then the joined
+      // sentence of remaining positives and negatives.
+      const groups = {};                  // { sectionKey: { positives, negatives, ownLines } }
       const sectionOrder = [];            // first-appearance order of section keys
-      const ownLineItems = [];            // scale-button results that render on their own line
 
       const allFeatures = getCustomizedFeatures(presentation);
 
@@ -3576,20 +3577,20 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         // Track for ROS dedup
         mentionedItems.add(rendered.text);
 
-        // ownLine items (e.g. "NYHA class III") render as standalone sentences
-        // outside the reportSection grouping — they are too discrete to fit
-        // into a comma-separated section.
-        if (rendered.ownLine) {
-          ownLineItems.push(rendered.text);
-          return;
-        }
-
         // Bucket into the section the AI chose (or "_other" if untagged).
         const sectionKey = feature.reportSection || '_other';
         if (!groups[sectionKey]) {
-          groups[sectionKey] = { positives: [], negatives: [] };
+          groups[sectionKey] = { positives: [], negatives: [], ownLines: [] };
           sectionOrder.push(sectionKey);
         }
+
+        // ownLine items (period-terminated labels, scale buttons) render as
+        // standalone sentences but stay within their section.
+        if (rendered.ownLine) {
+          groups[sectionKey].ownLines.push(rendered.text);
+          return;
+        }
+
         if (rendered.polarity === 'positive') {
           groups[sectionKey].positives.push(rendered.text);
         } else {
@@ -3609,19 +3610,19 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       finalOrder.forEach(sectionKey => {
         const group = groups[sectionKey];
         if (!group) return;
+
+        // Emit ownLine items first within this section. They render as
+        // standalone capitalised sentences. Don't double-period — labels like
+        // "Active cancer (treatment ongoing)." already have one.
+        group.ownLines.forEach(item => {
+          const capitalised = item.charAt(0).toUpperCase() + item.slice(1);
+          const finalText = /[.!?]$/.test(capitalised.trim()) ? capitalised : capitalised + '.';
+          sentences.push(finalText);
+        });
+
+        // Then emit the joined sentence from positives and negatives, if any.
         const sentence = buildSectionSentence(group.positives, group.negatives);
         if (sentence) sentences.push(sentence);
-      });
-
-      // Append ownLine items as their own sentences, each terminated with a period.
-      // Scale buttons (NYHA, mMRC, etc.) sit at the end of the HOPC because they
-      // are summary classifications that read naturally after the narrative.
-      // Period-terminated tertiary/binary labels are routed here too.
-      // Don't double-period — labels like "Severe chest pain." already have one.
-      ownLineItems.forEach(item => {
-        const capitalised = item.charAt(0).toUpperCase() + item.slice(1);
-        const finalText = /[.!?]$/.test(capitalised.trim()) ? capitalised : capitalised + '.';
-        sentences.push(finalText);
       });
 
       return {
