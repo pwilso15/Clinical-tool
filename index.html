@@ -3376,16 +3376,40 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       const note = patientData.notes && patientData.notes[feature.key];
       const buttonType = feature.buttonType || 'tertiary';
 
+      // Helper: a label ending in "." is treated as a complete sentence.
+      // It renders on its own line (won't be joined into the comma-separated
+      // group lists), preserves its original capitalisation, and gets emitted
+      // as-is. Useful for labels like "Severe chest pain radiating to left
+      // arm with associated diaphoresis." that read as full clinical sentences
+      // rather than items in a list.
+      const endsWithPeriod = (s) => typeof s === 'string' && s.trim().endsWith('.');
+      const sentenceText = (s) => {
+        // Capitalise the first letter, leave the rest alone, preserve the period.
+        const str = String(s || '').trim();
+        if (!str) return str;
+        return str.charAt(0).toUpperCase() + str.slice(1);
+      };
+
       // Custom note overrides everything; treat it as a positive finding (it's
       // there because the doctor felt it warranted recording).
+      // If the note ends in a period, treat it as a standalone sentence too.
       if (note) {
+        if (endsWithPeriod(note)) {
+          return { text: sentenceText(note), polarity: 'positive', ownLine: true };
+        }
         return { text: note, polarity: 'positive' };
       }
 
       switch (buttonType) {
         case 'binary':
-          if (state === 'unsafe') return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
-          if (state === 'safe') return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          if (state === 'unsafe') {
+            if (endsWithPeriod(feature.unsafe)) return { text: sentenceText(feature.unsafe), polarity: 'positive', ownLine: true };
+            return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
+          }
+          if (state === 'safe') {
+            if (endsWithPeriod(feature.safe)) return { text: sentenceText(feature.safe), polarity: 'negative', ownLine: true };
+            return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          }
           return null;
         case 'severity':
           if (state === 'mild' || state === 'moderate' || state === 'severe') {
@@ -3425,8 +3449,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           return null;
         case 'tertiary':
         default:
-          if (state === 'unsafe') return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
-          if (state === 'safe') return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          if (state === 'unsafe') {
+            if (endsWithPeriod(feature.unsafe)) return { text: sentenceText(feature.unsafe), polarity: 'positive', ownLine: true };
+            return { text: lowercaseFirst(feature.unsafe), polarity: 'positive' };
+          }
+          if (state === 'safe') {
+            if (endsWithPeriod(feature.safe)) return { text: sentenceText(feature.safe), polarity: 'negative', ownLine: true };
+            return { text: lowercaseFirst(feature.safe), polarity: 'negative' };
+          }
           return null;
       }
     }
@@ -3586,8 +3616,12 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       // Append ownLine items as their own sentences, each terminated with a period.
       // Scale buttons (NYHA, mMRC, etc.) sit at the end of the HOPC because they
       // are summary classifications that read naturally after the narrative.
+      // Period-terminated tertiary/binary labels are routed here too.
+      // Don't double-period — labels like "Severe chest pain." already have one.
       ownLineItems.forEach(item => {
-        sentences.push(item.charAt(0).toUpperCase() + item.slice(1) + '.');
+        const capitalised = item.charAt(0).toUpperCase() + item.slice(1);
+        const finalText = /[.!?]$/.test(capitalised.trim()) ? capitalised : capitalised + '.';
+        sentences.push(finalText);
       });
 
       return {
