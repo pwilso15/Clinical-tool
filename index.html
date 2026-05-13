@@ -3770,8 +3770,12 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
           if (text === null) return;
 
-          // examSystem must match a real EXAM_SECTIONS key to be folded in
-          const targetSection = (feature.examSystem && EXAM_SECTIONS[feature.examSystem])
+          // Use the feature's examSystem as the section name. If it's a
+          // canonical EXAM_SECTIONS key (Cardiovascular, etc.), it folds into
+          // that section's button group. If it's a custom name (e.g. "ECG",
+          // "Urinalysis", "POCUS"), it renders as its own section after the
+          // canonical ones. Empty examSystem falls back to "Presentation-specific".
+          const targetSection = feature.examSystem
             ? feature.examSystem
             : 'Presentation-specific';
           addFinding(targetSection, polarity, text);
@@ -5519,20 +5523,35 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
                                       <p class="text-xs text-gray-500 mt-1">Each line: short value (used internally) <code>|</code> display label. Examples: NYHA, mMRC, Killip, ASA grade.</p>
                                     </div>
                                     ` : ''}
-                                    ${(currentType === 'Examination' || currentType === 'Exam') ? `
+                                    ${(currentType === 'Examination' || currentType === 'Exam') ? (() => {
+                                      const canonical = Object.keys(EXAM_SECTIONS);
+                                      const current = feature.examSystem || '';
+                                      const isCustom = current && !canonical.includes(current);
+                                      return `
                                     <div class="mt-2">
                                       <label class="block text-xs text-gray-600 mb-1">🩺 Render under exam system:</label>
                                       <select 
                                         onchange="event.stopPropagation(); changeExamSystem('${presentation}', ${idx}, this.value)"
                                         onclick="event.stopPropagation()"
                                         class="w-full text-xs px-2 py-1 border rounded">
-                                        <option value="" ${!feature.examSystem ? 'selected' : ''}>— Presentation-specific (default) —</option>
-                                        ${Object.keys(EXAM_SECTIONS).map(sysName => `
-                                          <option value="${sysName}" ${feature.examSystem === sysName ? 'selected' : ''}>${sysName}</option>
+                                        <option value="" ${!current ? 'selected' : ''}>— Presentation-specific (default) —</option>
+                                        ${canonical.map(sysName => `
+                                          <option value="${sysName}" ${current === sysName ? 'selected' : ''}>${sysName}</option>
                                         `).join('')}
+                                        <option value="__custom__" ${isCustom ? 'selected' : ''}>Custom… ${isCustom ? `(${current.replace(/"/g, '&quot;')})` : ''}</option>
                                       </select>
+                                      ${isCustom ? `
+                                      <input type="text"
+                                        value="${current.replace(/"/g, '&quot;')}"
+                                        onchange="event.stopPropagation(); changeExamSystem('${presentation}', ${idx}, this.value)"
+                                        onclick="event.stopPropagation()"
+                                        placeholder="e.g. ECG, Urinalysis, POCUS"
+                                        class="w-full text-xs px-2 py-1 border rounded mt-1">
+                                      <p class="text-xs text-gray-500 mt-1">Custom section will render after the standard systems in your reports.</p>
+                                      ` : ''}
                                     </div>
-                                    ` : ''}
+                                    `;
+                                    })() : ''}
                                     <div class="mt-2">
                                       <label class="block text-xs text-gray-600 mb-1">💡 Educational Comment (hover tooltip):</label>
                                       <textarea 
@@ -7495,10 +7514,16 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         }
         if (typeWord === 'examination' || typeWord === 'exam') {
           currentType = 'Examination';
-          // Section becomes a properly-cased examSystem
-          currentSection = sectionWord ? matchExamSystem(sectionWord) : '';
-          if (sectionWord && !validExamSystems.find(s => s.toLowerCase() === sectionWord.toLowerCase())) {
-            warnings.push(`Heading "${line.trim()}": "${sectionWord}" is not a standard exam system. Valid options: ${validExamSystems.join(', ')}.`);
+          // Section becomes a properly-cased examSystem. For canonical systems
+          // (Cardiovascular, etc.) we normalise the case; for custom ones (ECG,
+          // Urinalysis, POCUS) we preserve the user's casing as-written. Custom
+          // sections render in their own block after the canonical ones, in
+          // first-appearance order.
+          if (sectionWord) {
+            const canonical = validExamSystems.find(s => s.toLowerCase() === sectionWord.toLowerCase());
+            currentSection = canonical || sectionWord;
+          } else {
+            currentSection = '';
           }
           return true;
         }
@@ -8918,11 +8943,14 @@ Produce a revised checklist that addresses the critique. Return the full feature
           warnings.push(`${where}: reportSection should only be set on History features.`);
         }
         if (f.type === 'Examination') {
-          if (f.examSystem && !AI_VALID_EXAM_SYSTEMS.includes(f.examSystem)) {
-            errors.push(`${where}: examSystem "${f.examSystem}" is not in the allowed list (${AI_VALID_EXAM_SYSTEMS.join(', ')}).`);
-          }
           if (!f.examSystem) {
             warnings.push(`${where}: Examination feature has no examSystem — will fall into "Presentation-specific" bucket.`);
+          } else if (!AI_VALID_EXAM_SYSTEMS.includes(f.examSystem)) {
+            // Non-canonical examSystem (e.g. "ECG", "Urinalysis", "POCUS") — allowed
+            // but not what AI Builder is asked to produce. Just warn so the user
+            // is aware. Custom sections like these typically come from manual
+            // text-upload edits.
+            warnings.push(`${where}: examSystem "${f.examSystem}" isn't a standard system — it'll render as its own section after the canonical ones.`);
           }
         } else if (f.examSystem) {
           warnings.push(`${where}: examSystem should only be set on Examination features.`);
@@ -9341,22 +9369,26 @@ Produce a revised checklist that addresses the critique. Return the full feature
       const customization = userPreferences.customizations.presentations[presentation];
       const numRegularFeatures = customization.features.length;
 
-      // Empty string means "no examSystem set" — store as undefined to keep JSON tidy
-      const value = newExamSystem || undefined;
-
-      if (idx < numRegularFeatures) {
-        if (value === undefined) {
-          delete customization.features[idx].examSystem;
-        } else {
-          customization.features[idx].examSystem = value;
-        }
+      // Special sentinel "__custom__" means the user picked the "Custom…" option
+      // from the dropdown. Seed with a placeholder string that triggers the
+      // text-input field on next render. Empty string and undefined are both
+      // treated as "not set"; we use a single space here as a placeholder that
+      // gets edited by the text input.
+      let value;
+      if (newExamSystem === '__custom__') {
+        value = ' ';  // placeholder so isCustom check passes on next render
       } else {
-        const customIdx = idx - numRegularFeatures;
-        if (value === undefined) {
-          delete customization.customFeatures[customIdx].examSystem;
-        } else {
-          customization.customFeatures[customIdx].examSystem = value;
-        }
+        value = newExamSystem || undefined;
+      }
+
+      const targetFeature = idx < numRegularFeatures
+        ? customization.features[idx]
+        : customization.customFeatures[idx - numRegularFeatures];
+
+      if (value === undefined) {
+        delete targetFeature.examSystem;
+      } else {
+        targetFeature.examSystem = value;
       }
 
       saveCustomizationsSilent();
