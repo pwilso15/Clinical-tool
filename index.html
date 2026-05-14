@@ -3259,12 +3259,15 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           return `${base} bg-red-600 hover:bg-red-700`; // 10
 
         case 'scale':
-          // Multivalent: grey when unset, blue when any option chosen.
-          // We don't know the semantics of each option (NYHA III isn't necessarily
-          // "bad", just "informational") so we use a neutral colour rather than
-          // the green/yellow/red gradient used by severity scales.
+          // Multivalent cycling: grey when unset, blue when any option chosen.
           if (state === 'null' || !state) return `${base} bg-gray-500 hover:bg-gray-600`;
           return `${base} bg-blue-600 hover:bg-blue-700`;
+
+        case 'list':
+          // List picker: same neutral colour idea as scale but indigo so the
+          // user can visually distinguish "tap to cycle" from "tap to pick".
+          if (state === 'null' || !state) return `${base} bg-gray-500 hover:bg-gray-600`;
+          return `${base} bg-indigo-600 hover:bg-indigo-700`;
           
         case 'tertiary':
         default:
@@ -3313,6 +3316,18 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           if (Array.isArray(options)) {
             const opt = options.find(o => o.value === state);
             if (opt) return unsafe ? `${unsafe} ${opt.label || opt.value}` : (opt.label || opt.value);
+          }
+          return state;
+
+        case 'list':
+          // List picker: same render shape as scale. The hint is "tap to pick"
+          // (vs scale's "tap to set") so the user knows tapping opens a list.
+          if (state === 'null' || !state) {
+            return unsafe ? `${unsafe} — tap to pick` : 'Tap to pick';
+          }
+          if (Array.isArray(options)) {
+            const opt = options.find(o => o.value === state);
+            if (opt) return unsafe ? `${unsafe}: ${opt.label || opt.value}` : (opt.label || opt.value);
           }
           return state;
 
@@ -3433,16 +3448,14 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           }
           return null;
         case 'scale':
-          // Multivalent button — feature.options is an array of { value, label }.
-          // The toggled state is the option's `value`. We render the label.
-          // Polarity is always 'positive' because picking any value is recording
-          // a finding (e.g. NYHA class III is a positive observation).
-          // Special-case "isOwnLine: true" — render on its own line in the report
-          // (e.g. NYHA class) by attaching a marker the formatter respects.
+        case 'list':
+          // Multivalent button (scale = cycle UX; list = picker UX). Both share
+          // the same data shape (feature.options array of {value, label}) and
+          // the same rendered output: "{unsafe label} {option label}" on its
+          // own line in the report (e.g. "NYHA class III", "Pain location calf").
           if (state && state !== 'null' && Array.isArray(feature.options)) {
             const opt = feature.options.find(o => o.value === state);
             if (!opt) return null;
-            // Format: "{unsafe label} {option label}", e.g. "NYHA class III"
             const text = `${feature.unsafe || ''} ${opt.label || opt.value}`.trim();
             return { text, polarity: 'positive', ownLine: true };
           }
@@ -5576,12 +5589,13 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                         <option value="severity" ${feature.buttonType === 'severity' ? 'selected' : ''}>Severity (None/Mild/Mod/Severe)</option>
                                         <option value="duration" ${feature.buttonType === 'duration' ? 'selected' : ''}>Duration (&lt;5min/5-30min/30min-6hr/&gt;6hr)</option>
                                         <option value="pain-scale" ${feature.buttonType === 'pain-scale' ? 'selected' : ''}>Pain Scale (0-10)</option>
-                                        <option value="scale" ${feature.buttonType === 'scale' ? 'selected' : ''}>Scale — custom options (e.g. NYHA I-IV)</option>
+                                        <option value="scale" ${feature.buttonType === 'scale' ? 'selected' : ''}>Scale — cycle through options (good for 2-5 items)</option>
+                                        <option value="list" ${feature.buttonType === 'list' ? 'selected' : ''}>List — pick from menu (good for 6+ items)</option>
                                       </select>
                                     </div>
-                                    ${feature.buttonType === 'scale' ? `
+                                    ${(feature.buttonType === 'scale' || feature.buttonType === 'list') ? `
                                     <div class="mt-2 bg-blue-50 border border-blue-200 rounded p-2">
-                                      <label class="block text-xs text-gray-700 font-semibold mb-1">⚙️ Scale options (one per line — format: <code>value | label</code>):</label>
+                                      <label class="block text-xs text-gray-700 font-semibold mb-1">⚙️ Options (one per line — format: <code>value | label</code>):</label>
                                       <textarea
                                         oninput="event.stopPropagation(); changeScaleOptions('${presentation}', ${idx}, this.value)"
                                         onclick="event.stopPropagation()"
@@ -6176,6 +6190,53 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
             </div>
             ` : ''}
 
+            <!-- List Picker Modal: shown when a buttonType:list feature is tapped -->
+            ${window.listPickerState && window.listPickerState.open ? (() => {
+              const key = window.listPickerState.featureKey;
+              const feature = patientData.presentation
+                ? getCustomizedFeatures(patientData.presentation).find(f => f.key === key)
+                : null;
+              if (!feature || !Array.isArray(feature.options)) {
+                return '';
+              }
+              const currentState = patientData.features[key] || 'null';
+              const label = feature.unsafe || feature.safe || 'Select option';
+              return `
+            <div class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-end sm:items-center justify-center p-4" onclick="closeListPicker()">
+              <div class="bg-white rounded-lg shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col" onclick="event.stopPropagation()">
+                <div class="bg-gradient-to-r from-indigo-600 to-indigo-700 text-white p-4 rounded-t-lg flex items-center justify-between">
+                  <div>
+                    <h2 class="text-lg font-bold">${label.replace(/</g, '&lt;')}</h2>
+                    <p class="text-xs opacity-90">Tap an option to select</p>
+                  </div>
+                  <button onclick="closeListPicker()" class="text-white hover:bg-white hover:bg-opacity-20 rounded p-2">✕</button>
+                </div>
+                <div class="overflow-y-auto flex-1 p-3 space-y-1">
+                  ${feature.options.map(opt => {
+                    const isSelected = opt.value === currentState;
+                    return `
+                    <button onclick="selectListOption('${opt.value.replace(/'/g, "\\'")}')"
+                      class="w-full text-left px-3 py-3 rounded border ${isSelected ? 'bg-indigo-600 text-white border-indigo-700 font-semibold' : 'bg-white hover:bg-indigo-50 border-gray-200 text-gray-800'} transition-colors">
+                      ${isSelected ? '✓ ' : ''}${(opt.label || opt.value).replace(/</g, '&lt;')}
+                    </button>
+                    `;
+                  }).join('')}
+                </div>
+                <div class="border-t p-3 flex gap-2 bg-gray-50 rounded-b-lg">
+                  <button onclick="clearListOption()"
+                    class="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm">
+                    × Clear selection
+                  </button>
+                  <button onclick="closeListPicker()"
+                    class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+              `;
+            })() : ''}
+
             <!-- Text Upload Modal: paste or upload edited text file -->
             ${textUploadState.open ? `
             <div class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
@@ -6748,10 +6809,59 @@ Pulmonary embolism</pre>
       showSaveStatus();
     };
 
+    // Picker modal state — used by buttonType: 'list' features. Stored on
+    // window so inline onclick handlers can read it.
+    window.listPickerState = {
+      open: false,
+      featureKey: null,
+      featureLabel: ''
+    };
+
     window.toggleFeature = function(key) {
       if (longPressActive) return; // Don't toggle if long press triggered
+
+      // For list-type features, open the picker modal instead of cycling.
+      // The user picks a single option (or "clear"), which sets the feature
+      // state. Picker UX scales better than cycling once options exceed ~5.
+      const feature = getCustomizedFeatures(patientData.presentation).find(f => f.key === key);
+      if (feature && feature.buttonType === 'list' && Array.isArray(feature.options) && feature.options.length > 0) {
+        window.listPickerState.open = true;
+        window.listPickerState.featureKey = key;
+        window.listPickerState.featureLabel = feature.unsafe || feature.safe || 'Select';
+        render();
+        return;
+      }
+
       toggleFeature(key);
       showSaveStatus();
+    };
+
+    // Handler called when user taps an option in the picker
+    window.selectListOption = function(value) {
+      const key = window.listPickerState.featureKey;
+      if (!key) return;
+      // Use the same patientData.features state slot scales use
+      patientData.features[key] = value;
+      window.listPickerState.open = false;
+      window.listPickerState.featureKey = null;
+      showSaveStatus();
+      render();
+    };
+
+    window.clearListOption = function() {
+      const key = window.listPickerState.featureKey;
+      if (!key) return;
+      patientData.features[key] = 'null';
+      window.listPickerState.open = false;
+      window.listPickerState.featureKey = null;
+      showSaveStatus();
+      render();
+    };
+
+    window.closeListPicker = function() {
+      window.listPickerState.open = false;
+      window.listPickerState.featureKey = null;
+      render();
     };
 
     window.toggleInvestigationToggle = function(category, key) {
@@ -7362,7 +7472,7 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           return true;
         }
 
-        if (bt === 'scale') {
+        if (bt === 'scale' || bt === 'list') {
           if (!Array.isArray(f.options) || f.options.length < 2) return false;
           return true;
         }
@@ -7401,7 +7511,7 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
         const out = [];
         // Build the main line
         let mainLine;
-        if (f.buttonType === 'scale' && Array.isArray(f.options)) {
+        if ((f.buttonType === 'scale' || f.buttonType === 'list') && Array.isArray(f.options)) {
           // Check if the scale name can be recovered from a common prefix of
           // the option labels. If yes (e.g. "NYHA " for ["NYHA I", "NYHA II"]),
           // emit as pipe-only; the parser will re-detect it.
@@ -7798,6 +7908,12 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           return { value, label: v };
         });
 
+        // Auto-promote to "list" buttonType when there are many options.
+        // Cycling through 6+ items by tapping is painful; the picker UX of the
+        // list button handles long lists much better. The data shape is the
+        // same — only the input UX changes.
+        const inferredButtonType = options.length >= 6 ? 'list' : 'scale';
+
         const feature = {
           key,
           safe: scaleName ? `${scaleName.toLowerCase()} not assessed` : 'not assessed',
@@ -7805,7 +7921,7 @@ Do not include any other top-level keys. Do not wrap in markdown code blocks. Be
           type: currentType,
           visible: true,
           redFlag,
-          buttonType: 'scale',
+          buttonType: inferredButtonType,
           options
         };
         if (currentSection) {
@@ -8980,20 +9096,24 @@ Produce a revised checklist that addresses the critique. Return the full feature
             warnings.push(`${where}: unsafe label "${f.unsafe}" contains a meta-word. For ${f.buttonType} buttons the label should be the finding itself (e.g. "headache" not "headache severity").`);
           }
         }
-        if (f.buttonType === 'scale') {
+        if (f.buttonType === 'scale' || f.buttonType === 'list') {
+          const typeLabel = f.buttonType;
           if (!Array.isArray(f.options) || f.options.length < 2) {
-            errors.push(`${where}: scale button must have at least 2 options. Got ${(f.options || []).length}.`);
-          } else if (f.options.length > 10) {
-            warnings.push(`${where}: scale has ${f.options.length} options — consider whether a shorter list would be easier to use.`);
+            errors.push(`${where}: ${typeLabel} button must have at least 2 options. Got ${(f.options || []).length}.`);
           } else {
+            // For scale (cycling), warn at 10+ — cycling becomes painful.
+            // For list (picker), no warning — pickers handle long lists fine.
+            if (f.buttonType === 'scale' && f.options.length > 10) {
+              warnings.push(`${where}: scale has ${f.options.length} options — consider switching to "list" buttonType for a picker UX.`);
+            }
             const seenValues = new Set();
             f.options.forEach((opt, i) => {
               if (!opt || typeof opt !== 'object') {
-                errors.push(`${where}: scale option ${i + 1} is malformed.`);
+                errors.push(`${where}: ${typeLabel} option ${i + 1} is malformed.`);
                 return;
               }
-              if (!opt.value) errors.push(`${where}: scale option ${i + 1} has empty value.`);
-              if (seenValues.has(opt.value)) errors.push(`${where}: scale option value "${opt.value}" is duplicated.`);
+              if (!opt.value) errors.push(`${where}: ${typeLabel} option ${i + 1} has empty value.`);
+              if (seenValues.has(opt.value)) errors.push(`${where}: ${typeLabel} option value "${opt.value}" is duplicated.`);
               seenValues.add(opt.value);
             });
           }
