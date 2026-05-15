@@ -2513,7 +2513,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         if (!userPreferences.customizations.presentations[presentation]) {
           // New presentation - create from scratch
           userPreferences.customizations.presentations[presentation] = {
-            features: MASTER_FEATURES[presentation].map(f => ({
+            features: (MASTER_FEATURES[presentation] || []).map(f => ({
               ...f,
               visible: true,
               redFlag: f.redFlag || false  // Preserve redFlag from MASTER_FEATURES
@@ -2530,7 +2530,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
           // Failure features back into the UI on every page load).
           const existing = userPreferences.customizations.presentations[presentation];
           const existingKeys = new Set((existing.features || []).map(f => f.key));
-          const masterKeys = MASTER_FEATURES[presentation].map(f => f.key);
+          const masterKeys = (MASTER_FEATURES[presentation] || []).map(f => f.key);
           const allMasterKeysPresent = masterKeys.every(k => existingKeys.has(k));
 
           if (!allMasterKeysPresent) {
@@ -3061,29 +3061,104 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     // TOGGLE FUNCTIONS - SAVE TO LOCALSTORAGE ONLY
     // ============================================================================
 
+    // Compute the next state given the current state, the buttonType, and an
+    // optional options array (for scale buttonType). Returns the next state
+    // string. Pulled out as a helper so toggleFeature, toggleROS, and toggleExam
+    // all share the cycling logic. Note: 'list' buttonType doesn't cycle — it
+    // opens a picker — so callers handle that separately before calling here.
+    function computeNextState(current, buttonType, options) {
+      const cur = current || 'null';
+      switch (buttonType) {
+        case 'binary':
+          return cur === 'safe' ? 'unsafe' : 'safe';
+        case 'severity':
+          if (cur === 'null') return 'mild';
+          if (cur === 'mild') return 'moderate';
+          if (cur === 'moderate') return 'severe';
+          if (cur === 'severe') return 'null';
+          return 'null';
+        case 'duration':
+          if (cur === 'null') return 'short';
+          if (cur === 'short') return 'medium';
+          if (cur === 'medium') return 'long';
+          if (cur === 'long') return 'very-long';
+          if (cur === 'very-long') return 'null';
+          return 'null';
+        case 'pain-scale':
+          if (cur === 'null') return '0';
+          if (cur === '10') return 'null';
+          const num = parseInt(cur);
+          return isNaN(num) ? '0' : String(num + 1);
+        case 'scale':
+          if (!Array.isArray(options) || options.length === 0) return 'null';
+          if (cur === 'null') return options[0].value;
+          const idx = options.findIndex(o => o.value === cur);
+          if (idx === -1 || idx === options.length - 1) return 'null';
+          return options[idx + 1].value;
+        case 'tertiary':
+        default:
+          return cur === 'null' ? 'safe' : cur === 'safe' ? 'unsafe' : 'null';
+      }
+    }
+
+    // Find a custom ROS or Exam item by its key. Returns the item object or
+    // null. Used by the toggle handlers to look up buttonType/options/etc.
+    function findCustomROSItem(key) {
+      return (userPreferences.customizations.customROS || []).find(item => item && item.key === key) || null;
+    }
+    function findCustomExamItem(key) {
+      return (userPreferences.customizations.customExam || []).find(item => item && item.key === key) || null;
+    }
+
     function toggleROS(key) {
-      // If there's a custom note, clear it first and reset to null
+      // Look up the item config to determine buttonType + options. Custom items
+      // can now use any buttonType; built-in ROS items are always tertiary
+      // (they're defined statically in ROS_SYSTEMS without a buttonType field).
+      const custom = findCustomROSItem(key);
+      const buttonType = (custom && custom.buttonType) || 'tertiary';
+      const options = custom && custom.options;
+
+      // Note: list buttonType opens a picker rather than cycling.
+      if (buttonType === 'list' && Array.isArray(options) && options.length > 0) {
+        window.listPickerState.open = true;
+        window.listPickerState.featureKey = key;
+        window.listPickerState.featureLabel = (custom && (custom.unsafe || custom.safe)) || 'Select';
+        // Tell the picker it's targeting ros state slot, not features
+        window.listPickerState.targetSlot = 'ros';
+        render();
+        return;
+      }
+
+      // If there's a custom note, clear it first and reset to null/safe
       if (patientData.notes && patientData.notes[key]) {
         delete patientData.notes[key];
-        patientData.ros[key] = "null";
+        patientData.ros[key] = buttonType === 'binary' ? 'safe' : 'null';
       } else {
-        const current = patientData.ros[key] || "null";
-        const next = current === "null" ? "safe" : current === "safe" ? "unsafe" : "null";
-        patientData.ros[key] = next;
+        patientData.ros[key] = computeNextState(patientData.ros[key], buttonType, options);
       }
       savePatientData();
       render();
     }
 
     function toggleExam(key) {
-      // If there's a custom note, clear it first and reset to null
+      const custom = findCustomExamItem(key);
+      const buttonType = (custom && custom.buttonType) || 'tertiary';
+      const options = custom && custom.options;
+
+      if (buttonType === 'list' && Array.isArray(options) && options.length > 0) {
+        window.listPickerState.open = true;
+        window.listPickerState.featureKey = key;
+        window.listPickerState.featureLabel = (custom && (custom.unsafe || custom.safe)) || 'Select';
+        window.listPickerState.targetSlot = 'exam';
+        render();
+        return;
+      }
+
       if (patientData.notes && patientData.notes[key]) {
         delete patientData.notes[key];
-        patientData.exam[key] = "null";
+        patientData.exam[key] = buttonType === 'binary' ? 'safe' : 'null';
       } else {
-        const current = patientData.exam[key] || "null";
-        const next = current === "null" ? "safe" : current === "safe" ? "unsafe" : "null";
-        patientData.exam[key] = next;
+        patientData.exam[key] = computeNextState(patientData.exam[key], buttonType, options);
       }
       savePatientData();
       render();
@@ -3094,77 +3169,11 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       const feature = getCustomizedFeatures(patientData.presentation).find(f => f.key === key);
       const buttonType = feature?.buttonType || 'tertiary';
       
-      // If there's a custom note, clear it first and reset based on button type
       if (patientData.notes && patientData.notes[key]) {
         delete patientData.notes[key];
         patientData.features[key] = buttonType === 'binary' ? 'safe' : 'null';
       } else {
-        const current = patientData.features[key] || 'null';
-        let next;
-        
-        switch (buttonType) {
-          case 'binary':
-            // Binary: safe ↔ unsafe
-            next = current === 'safe' ? 'unsafe' : 'safe';
-            break;
-            
-          case 'severity':
-            // Severity: null → mild → moderate → severe → null
-            if (current === 'null') next = 'mild';
-            else if (current === 'mild') next = 'moderate';
-            else if (current === 'moderate') next = 'severe';
-            else if (current === 'severe') next = 'null';
-            else next = 'null';
-            break;
-            
-          case 'duration':
-            // Duration: null → short → medium → long → very-long → null
-            if (current === 'null') next = 'short';
-            else if (current === 'short') next = 'medium';
-            else if (current === 'medium') next = 'long';
-            else if (current === 'long') next = 'very-long';
-            else if (current === 'very-long') next = 'null';
-            else next = 'null';
-            break;
-            
-          case 'pain-scale':
-            // Pain scale: null → 0 → 1 → ... → 10 → null
-            if (current === 'null') next = '0';
-            else if (current === '10') next = 'null';
-            else {
-              const num = parseInt(current);
-              next = isNaN(num) ? '0' : String(num + 1);
-            }
-            break;
-
-          case 'scale':
-            // Multivalent scale (e.g. NYHA): cycle null → option[0] → option[1] → ... → null
-            // The options come from the feature definition itself.
-            if (Array.isArray(feature.options) && feature.options.length > 0) {
-              if (current === 'null') {
-                next = feature.options[0].value;
-              } else {
-                const idx = feature.options.findIndex(o => o.value === current);
-                if (idx === -1 || idx === feature.options.length - 1) {
-                  next = 'null';
-                } else {
-                  next = feature.options[idx + 1].value;
-                }
-              }
-            } else {
-              // No options defined — silently fall through to null
-              next = 'null';
-            }
-            break;
-
-          case 'tertiary':
-          default:
-            // Tertiary (default): null → safe → unsafe → null
-            next = current === "null" ? "safe" : current === "safe" ? "unsafe" : "null";
-            break;
-        }
-        
-        patientData.features[key] = next;
+        patientData.features[key] = computeNextState(patientData.features[key], buttonType, feature && feature.options);
       }
       
       // Auto-sync with ROS if mapping exists
@@ -3674,18 +3683,42 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         });
       });
       
-      // Add custom ROS items
+      // Add custom ROS items. Dispatch on buttonType so non-tertiary buttons
+      // (scale, list, severity, duration, pain-scale, binary) render correctly
+      // — for these we synthesize a feature-like object and reuse the same
+      // rendering helpers that presentation features use.
       (userPreferences.customizations.customROS || []).filter(item => item).forEach(item => {
         const state = rosData[item.key];
         const note = patientData.notes && patientData.notes[item.key];
-        
-        // If there's a custom note, always include it (regardless of state)
+
+        // Note takes precedence over state for any buttonType
         if (note) {
           positives.push(note);
-        } else if (state === "unsafe") {
-          positives.push(lowercaseFirst(item.unsafe));
-        } else if (state === "safe") {
-          negatives.push(lowercaseFirst(item.safe));
+          return;
+        }
+
+        // Synthesize a feature-shaped object so renderFeatureValue handles it.
+        // patientData.notes is already checked above; pass an empty notes map
+        // to avoid double-counting.
+        const synthetic = {
+          key: item.key,
+          safe: item.safe,
+          unsafe: item.unsafe,
+          buttonType: item.buttonType || 'tertiary',
+          options: item.options || null
+        };
+        const dataMap = { [item.key]: state };
+        // Save current notes, swap in empty, render, restore
+        const savedNotes = patientData.notes;
+        patientData.notes = {};
+        const rendered = renderFeatureValue(synthetic, dataMap);
+        patientData.notes = savedNotes;
+
+        if (!rendered) return;
+        if (rendered.polarity === 'positive') {
+          positives.push(rendered.text);
+        } else if (rendered.polarity === 'negative') {
+          negatives.push(rendered.text);
         }
       });
 
@@ -3722,6 +3755,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       };
 
       // 1. Standard examination sections (General / Cardiovascular / etc.)
+      // These are tertiary by definition so no buttonType dispatch needed here.
       Object.entries(EXAM_SECTIONS).forEach(([section, buttons]) => {
         buttons.forEach(btn => {
           const state = examData[btn.key];
@@ -3739,21 +3773,39 @@ What rare or uncommon diagnoses should be considered in the differential for thi
             addFinding(section, 'positive', lowercaseFirst(displayUnsafe));
           }
         });
+      });
 
-        // Custom exam items the user added under this section
-        (userPreferences.customizations.customExam || [])
-          .filter(item => item && item.section === section)
-          .forEach(item => {
-            const state = examData[item.key];
-            const note = patientData.notes && patientData.notes[item.key];
-            if (note) {
-              addFinding(section, 'positive', note);
-            } else if (state === 'safe') {
-              addFinding(section, 'negative', lowercaseFirst(item.safe));
-            } else if (state === 'unsafe') {
-              addFinding(section, 'positive', lowercaseFirst(item.unsafe));
-            }
-          });
+      // 1b. Custom exam items the user added. These can live in canonical
+      // sections OR custom sections (ECG, Urinalysis, POCUS, etc.), and can
+      // use any buttonType. Iterate them independently so items in custom
+      // sections aren't lost when EXAM_SECTIONS doesn't contain their section.
+      (userPreferences.customizations.customExam || []).forEach(item => {
+        if (!item || !item.section) return;
+        const state = examData[item.key];
+        const note = patientData.notes && patientData.notes[item.key];
+
+        if (note) {
+          addFinding(item.section, 'positive', note);
+          return;
+        }
+
+        // Synthesize feature-shaped object and dispatch through the same
+        // renderer presentation features use. Handles scale/list/severity/etc.
+        const synthetic = {
+          key: item.key,
+          safe: item.safe,
+          unsafe: item.unsafe,
+          buttonType: item.buttonType || 'tertiary',
+          options: item.options || null
+        };
+        const dataMap = { [item.key]: state };
+        const savedNotes = patientData.notes;
+        patientData.notes = {};
+        const rendered = renderFeatureValue(synthetic, dataMap);
+        patientData.notes = savedNotes;
+
+        if (!rendered) return;
+        addFinding(item.section, rendered.polarity, rendered.text);
       });
 
       // 2. Presentation-specific exam features fold into their declared examSystem.
@@ -4956,6 +5008,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                         }).join('')}
                         ${customForSystem.map(item => {
                           const state = patientData.ros[item.key] || "null";
+                          const buttonType = item.buttonType || 'tertiary';
+                          const options = item.options || null;
                           const redFlagStyle = item.redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
                           const noteText = patientData.notes && patientData.notes[item.key];
                           const hasNote = !!noteText;
@@ -4967,9 +5021,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                               onmouseleave="cancelLongPress()"
                               ontouchstart="startLongPress('${item.key}', '${item.safe} / ${item.unsafe}')"
                               ontouchend="cancelLongPress()"
-                              class="${getButtonClass(state, hasNote)} ${redFlagStyle} border-indigo-300"
+                              class="${getButtonClass(state, hasNote, buttonType)} ${redFlagStyle} border-indigo-300"
                               title="${noteText || ''}">
-                              ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText)}
+                              ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText, buttonType, options)}
                             </button>
                           `;
                         }).join('')}
@@ -4999,6 +5053,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         ${orphanItems.map(item => {
                           const state = patientData.ros[item.key] || "null";
+                          const buttonType = item.buttonType || 'tertiary';
+                          const options = item.options || null;
                           const redFlagStyle = item.redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
                           const noteText = patientData.notes && patientData.notes[item.key];
                           const hasNote = !!noteText;
@@ -5010,9 +5066,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                               onmouseleave="cancelLongPress()"
                               ontouchstart="startLongPress('${item.key}', '${item.safe} / ${item.unsafe}')"
                               ontouchend="cancelLongPress()"
-                              class="${getButtonClass(state, hasNote)} ${redFlagStyle}"
+                              class="${getButtonClass(state, hasNote, buttonType)} ${redFlagStyle}"
                               title="${noteText || ''}">
-                              ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText)}
+                              ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText, buttonType, options)}
                             </button>
                           `;
                         }).join('')}
@@ -5143,6 +5199,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                     }).join('')}
                     ${customButtons.map(item => {
                       const state = patientData.exam[item.key] || "null";
+                      const buttonType = item.buttonType || 'tertiary';
+                      const options = item.options || null;
                       const redFlagStyle = item.redFlag ? "ring-2 ring-yellow-400 ring-offset-2" : "";
                       const noteText = patientData.notes && patientData.notes[item.key];
                       const hasNote = !!noteText;
@@ -5154,9 +5212,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                           onmouseleave="cancelLongPress()"
                           ontouchstart="startLongPress('${item.key}', '${item.safe} / ${item.unsafe}')"
                           ontouchend="cancelLongPress()"
-                          class="${getButtonClass(state, hasNote)} ${redFlagStyle} border-indigo-300"
+                          class="${getButtonClass(state, hasNote, buttonType)} ${redFlagStyle} border-indigo-300"
                           title="${noteText || ''}">
-                          ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText)}
+                          ${item.redFlag ? '🚩 ' : ''}${getButtonText(item.safe, item.unsafe, state, noteText, buttonType, options)}
                         </button>
                       `;
                     }).join('')}
@@ -5487,6 +5545,11 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                       <div class="flex items-center justify-between mb-4">
                         <p class="text-sm text-gray-600">Customize which features appear for each presentation. Only presentations with feature toggles can be customized.</p>
                         <div class="flex gap-2">
+                          <button onclick="addPresentation()"
+                            class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 font-medium whitespace-nowrap"
+                            title="Create a new presentation from scratch">
+                            ⭐ + New Presentation
+                          </button>
                           <input type="file" id="import-file-input" accept=".json" style="display: none;" onchange="handleImportFile(event)">
                           <button onclick="document.getElementById('import-file-input').click()" 
                             class="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 font-medium whitespace-nowrap"
@@ -5495,12 +5558,24 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                           </button>
                         </div>
                       </div>
-                      ${Object.keys(MASTER_FEATURES).map((presentation, pIdx) => `
+                      ${(() => {
+                        // Combine built-in presentations (from MASTER_FEATURES) with
+                        // user-created custom presentations. Both render with the same
+                        // Configure UI because custom presentation features live in
+                        // userPreferences.customizations.presentations[name] (seeded
+                        // by addPresentation), the same store built-in customisations
+                        // use. Per-feature handlers therefore work unmodified.
+                        const builtIn = Object.keys(MASTER_FEATURES);
+                        const custom = (userPreferences.customizations.customPresentations || [])
+                          .map(cp => cp.name)
+                          .filter(name => !builtIn.includes(name));
+                        return [...builtIn, ...custom];
+                      })().map((presentation, pIdx) => `
                         <details class="border rounded-lg" 
                           data-presentation-idx="${pIdx}"
                           ${openPresentationDetails.has(presentation) ? 'open' : ''}>
                           <summary class="px-4 py-3 cursor-pointer hover:bg-gray-50 font-medium flex items-center justify-between">
-                            <span>${presentation}</span>
+                            <span>${!MASTER_FEATURES[presentation] ? '⭐ ' : ''}${presentation}</span>
                             <div class="flex items-center gap-1">
                               <button onclick="event.stopPropagation(); checkPresentationCompleteness('${presentation}')" 
                                 class="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
@@ -5522,6 +5597,19 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                                 title="Build clean JSON from OpenEvidence review using AI">
                                 🤖 Build from OE
                               </button>
+                              ${!MASTER_FEATURES[presentation] ? (() => {
+                                // Custom presentations get a delete button. Look up the
+                                // index in customPresentations so we can call the
+                                // existing deleteCustomPresentation handler.
+                                const cpIdx = (userPreferences.customizations.customPresentations || [])
+                                  .findIndex(cp => cp.name === presentation);
+                                return cpIdx >= 0 ? `
+                              <button onclick="event.stopPropagation(); deleteCustomPresentation(${cpIdx})"
+                                class="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 font-medium"
+                                title="Delete this custom presentation">
+                                🗑 Delete
+                              </button>` : '';
+                              })() : ''}
                             </div>
                           </summary>
                           <div class="px-4 py-3 border-t space-y-2 bg-gray-50">
@@ -6193,13 +6281,27 @@ IV | IV — symptoms at rest">${(feature.options || []).map(o => `${o.value} | $
             <!-- List Picker Modal: shown when a buttonType:list feature is tapped -->
             ${window.listPickerState && window.listPickerState.open ? (() => {
               const key = window.listPickerState.featureKey;
-              const feature = patientData.presentation
-                ? getCustomizedFeatures(patientData.presentation).find(f => f.key === key)
-                : null;
+              const slot = window.listPickerState.targetSlot || 'features';
+              // Look up the item from the right slot. Presentation features
+              // live in the customised features list; ROS/Exam custom items
+              // live in customROS/customExam arrays.
+              let feature;
+              let currentState;
+              if (slot === 'ros') {
+                feature = findCustomROSItem(key);
+                currentState = patientData.ros[key] || 'null';
+              } else if (slot === 'exam') {
+                feature = findCustomExamItem(key);
+                currentState = patientData.exam[key] || 'null';
+              } else {
+                feature = patientData.presentation
+                  ? getCustomizedFeatures(patientData.presentation).find(f => f.key === key)
+                  : null;
+                currentState = patientData.features[key] || 'null';
+              }
               if (!feature || !Array.isArray(feature.options)) {
                 return '';
               }
-              const currentState = patientData.features[key] || 'null';
               const label = feature.unsafe || feature.safe || 'Select option';
               return `
             <div class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-end sm:items-center justify-center p-4" onclick="closeListPicker()">
@@ -6840,10 +6942,17 @@ Pulmonary embolism</pre>
     window.selectListOption = function(value) {
       const key = window.listPickerState.featureKey;
       if (!key) return;
-      // Use the same patientData.features state slot scales use
-      patientData.features[key] = value;
+      // Route the write to whichever slot the toggle handler targeted.
+      // Features (presentation), ros, or exam — they're separate state buckets
+      // so a list-typed custom ROS item updates patientData.ros, not features.
+      const slot = window.listPickerState.targetSlot || 'features';
+      if (slot === 'ros') patientData.ros[key] = value;
+      else if (slot === 'exam') patientData.exam[key] = value;
+      else patientData.features[key] = value;
       window.listPickerState.open = false;
       window.listPickerState.featureKey = null;
+      window.listPickerState.targetSlot = null;
+      savePatientData();
       showSaveStatus();
       render();
     };
@@ -6851,9 +6960,14 @@ Pulmonary embolism</pre>
     window.clearListOption = function() {
       const key = window.listPickerState.featureKey;
       if (!key) return;
-      patientData.features[key] = 'null';
+      const slot = window.listPickerState.targetSlot || 'features';
+      if (slot === 'ros') patientData.ros[key] = 'null';
+      else if (slot === 'exam') patientData.exam[key] = 'null';
+      else patientData.features[key] = 'null';
       window.listPickerState.open = false;
       window.listPickerState.featureKey = null;
+      window.listPickerState.targetSlot = null;
+      savePatientData();
       showSaveStatus();
       render();
     };
@@ -6861,6 +6975,7 @@ Pulmonary embolism</pre>
     window.closeListPicker = function() {
       window.listPickerState.open = false;
       window.listPickerState.featureKey = null;
+      window.listPickerState.targetSlot = null;
       render();
     };
 
@@ -9369,7 +9484,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.toggleFeatureVisibility = function(presentation, idx) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false 
@@ -9395,7 +9510,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.toggleFeatureRedFlag = function(presentation, idx) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false 
@@ -9421,7 +9536,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.updateFeatureComment = function(presentation, idx, comment) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false 
@@ -9449,7 +9564,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.changeFeatureType = function(presentation, idx, newType) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false,
@@ -9477,7 +9592,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.changeButtonType = function(presentation, idx, newButtonType) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false,
@@ -9521,7 +9636,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
 
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({
             ...f, visible: true, redFlag: f.redFlag || false,
             type: f.type || 'History', buttonType: f.buttonType || 'tertiary'
           })),
@@ -9547,7 +9662,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.changeExamSystem = function(presentation, idx, newExamSystem) {
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({
             ...f,
             visible: true,
             redFlag: f.redFlag || false,
@@ -9603,7 +9718,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
       
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false  // Preserve original redFlag
@@ -9660,7 +9775,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
           // Initialize customization if needed
           if (!userPreferences.customizations.presentations[presentation]) {
             userPreferences.customizations.presentations[presentation] = {
-              features: MASTER_FEATURES[presentation].map(f => ({ 
+              features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
                 ...f, 
                 visible: true, 
                 redFlag: f.redFlag || false
@@ -9919,7 +10034,7 @@ Produce a revised checklist that addresses the critique. Return the full feature
       // Initialize customization if needed
       if (!userPreferences.customizations.presentations[presentation]) {
         userPreferences.customizations.presentations[presentation] = {
-          features: MASTER_FEATURES[presentation].map(f => ({ 
+          features: (MASTER_FEATURES[presentation] || []).map(f => ({ 
             ...f, 
             visible: true, 
             redFlag: f.redFlag || false
@@ -10200,6 +10315,67 @@ Produce a revised checklist that addresses the critique. Return the full feature
       render();
     };
 
+    // Shared helper: prompt the user for a buttonType and (if scale/list)
+    // a list of options. Returns { buttonType, options } or null if cancelled.
+    // Defaults to tertiary so the existing simple flow still works — pressing
+    // OK on the first prompt without changing anything keeps the current
+    // behaviour.
+    function promptForButtonType() {
+      const choices = [
+        { type: 'tertiary', label: 'Tertiary — grey/green/red (default)' },
+        { type: 'binary', label: 'Binary — toggle between normal/abnormal' },
+        { type: 'severity', label: 'Severity — none/mild/moderate/severe' },
+        { type: 'duration', label: 'Duration — <5min, 5-30min, 30min-6hr, >6hr' },
+        { type: 'pain-scale', label: 'Pain scale — 0 to 10' },
+        { type: 'scale', label: 'Scale — cycle through custom options (2-5 items)' },
+        { type: 'list', label: 'List — pick from menu (6+ items)' }
+      ];
+
+      const btPrompt = 'Button type?\n\n' +
+        choices.map((c, i) => `${i + 1}. ${c.label}`).join('\n') +
+        '\n\nEnter number (or leave blank for tertiary):';
+      const input = prompt(btPrompt, '1');
+      if (input === null) return null;  // user cancelled
+      const asNumber = parseInt(input.trim(), 10);
+      const idx = (!isNaN(asNumber) && asNumber >= 1 && asNumber <= choices.length) ? asNumber - 1 : 0;
+      const buttonType = choices[idx].type;
+
+      // Scale and list need options. Other types use their fixed states.
+      let options = null;
+      if (buttonType === 'scale' || buttonType === 'list') {
+        const optPrompt = 'Enter options, one per line.\n' +
+          'Each line: value | label\n\n' +
+          'Example:\n' +
+          '  I | NYHA I\n' +
+          '  II | NYHA II\n' +
+          '  III | NYHA III\n' +
+          '  IV | NYHA IV\n\n' +
+          'Or just one value per line (used as both value and label).';
+        const raw = prompt(optPrompt, '');
+        if (!raw || !raw.trim()) return null;
+        options = raw.split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0)
+          .map(line => {
+            const pipeIdx = line.indexOf('|');
+            if (pipeIdx >= 0) {
+              const value = line.slice(0, pipeIdx).trim();
+              const label = line.slice(pipeIdx + 1).trim();
+              return { value, label: label || value };
+            }
+            return { value: line, label: line };
+          })
+          .filter(o => o.value);
+
+        if (options.length < 2) {
+          alert('Need at least 2 options for a scale or list button. Cancelling.');
+          return null;
+        }
+      }
+
+      return { buttonType, options };
+    }
+
     window.addCustomROS = function() {
       // Discover available ROS systems: canonical from ROS_SYSTEMS plus any
       // custom systems the user has already created. Lets them pick from
@@ -10233,20 +10409,29 @@ Produce a revised checklist that addresses the critique. Return the full feature
       if (!safe) return;
       const unsafe = prompt('Enter the "abnormal/positive" label (e.g., "Night sweats"):');
       if (!unsafe) return;
-      
+
+      // Prompt for buttonType and options. Tertiary is the default — just
+      // press OK without changing anything to get the existing simple flow.
+      const btResult = promptForButtonType();
+      if (btResult === null) return;
+      const { buttonType, options } = btResult;
+
       if (!userPreferences.customizations.customROS) {
         userPreferences.customizations.customROS = [];
       }
       
       const customKey = `custom_ros_${Date.now()}`;
-      userPreferences.customizations.customROS.push({
+      const item = {
         key: customKey,
         system: system,
         safe: safe,
         unsafe: unsafe,
         visible: true,
-        redFlag: false
-      });
+        redFlag: false,
+        buttonType: buttonType
+      };
+      if (options) item.options = options;
+      userPreferences.customizations.customROS.push(item);
       
       saveCustomizationsSilent();
       render();
@@ -10285,20 +10470,28 @@ Produce a revised checklist that addresses the critique. Return the full feature
       if (!safe) return;
       const unsafe = prompt('Enter the "abnormal" finding (e.g., "Pericardial rub present"):');
       if (!unsafe) return;
-      
+
+      // Prompt for buttonType and options. Default tertiary preserves existing flow.
+      const btResult = promptForButtonType();
+      if (btResult === null) return;
+      const { buttonType, options } = btResult;
+
       if (!userPreferences.customizations.customExam) {
         userPreferences.customizations.customExam = [];
       }
       
       const customKey = `custom_exam_${Date.now()}`;
-      userPreferences.customizations.customExam.push({
+      const item = {
         key: customKey,
         safe: safe,
         unsafe: unsafe,
         section: section,
         visible: true,
-        redFlag: false
-      });
+        redFlag: false,
+        buttonType: buttonType
+      };
+      if (options) item.options = options;
+      userPreferences.customizations.customExam.push(item);
       
       saveCustomizationsSilent();
       render();
@@ -10311,9 +10504,10 @@ Produce a revised checklist that addresses the critique. Return the full feature
     window.addPresentation = function() {
       const name = prompt('Enter presentation name (e.g., "Dizziness", "Skin rash"):');
       if (!name || !name.trim()) return;
+      const trimmedName = name.trim();
       
-      // Check if presentation already exists
-      if (MASTER_FEATURES[name] || userPreferences.customizations.customPresentations?.find(cp => cp.name === name)) {
+      // Check if presentation already exists (either built-in or already custom)
+      if (MASTER_FEATURES[trimmedName] || userPreferences.customizations.customPresentations?.find(cp => cp.name === trimmedName)) {
         alert('A presentation with this name already exists!');
         return;
       }
@@ -10322,20 +10516,61 @@ Produce a revised checklist that addresses the critique. Return the full feature
         userPreferences.customizations.customPresentations = [];
       }
       
+      // Track the name in customPresentations (used for picker grouping and deletion).
+      // The actual features storage lives at customizations.presentations[name],
+      // same shape as built-in presentation customisations. That lets all the
+      // existing per-feature handlers (changeFeatureType, addCustomFeature, etc.)
+      // work unmodified.
       userPreferences.customizations.customPresentations.push({
-        name: name.trim(),
+        name: trimmedName,
         features: []
       });
-      
+
+      // Seed an empty customization entry so the Configure UI can find and edit it.
+      // features: [] (no built-in features to start with — user adds them via
+      // "+ Add Feature" or the AI Builder / text upload)
+      // customFeatures: [] (any features added manually go here)
+      if (!userPreferences.customizations.presentations[trimmedName]) {
+        userPreferences.customizations.presentations[trimmedName] = {
+          features: [],
+          customFeatures: []
+        };
+      }
+
+      // Open the new presentation's Configure section automatically so the user
+      // can immediately start adding features.
+      if (typeof openPresentationDetails !== 'undefined') {
+        openPresentationDetails.add(trimmedName);
+      }
+
       saveCustomizationsSilent();
       render();
+
+      // Quick hint about next steps
+      setTimeout(() => {
+        alert(`"${trimmedName}" created. Scroll down in Configure to find it — you can:\n\n• Add features manually via "+ Add Feature"\n• Use the AI Builder to generate a starter set\n• Upload a text file with features\n\nThen pick the presentation in an encounter to use it.`);
+      }, 100);
     };
 
     window.deleteCustomPresentation = function(cpIdx) {
       const presentation = userPreferences.customizations.customPresentations[cpIdx];
+      if (!presentation) return;
       if (!confirm(`Delete "${presentation.name}" presentation? This cannot be undone.`)) return;
       
       userPreferences.customizations.customPresentations.splice(cpIdx, 1);
+
+      // Also remove the seeded customisation entry (where the features live)
+      // so it doesn't orphan and re-appear if the name is reused later.
+      if (userPreferences.customizations.presentations &&
+          userPreferences.customizations.presentations[presentation.name]) {
+        delete userPreferences.customizations.presentations[presentation.name];
+      }
+
+      // If the patient is currently looking at this presentation, reset.
+      if (patientData.presentation === presentation.name) {
+        patientData.presentation = '';
+      }
+
       saveCustomizationsSilent();
       render();
     };
