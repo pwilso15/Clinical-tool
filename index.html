@@ -5415,7 +5415,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
             <!-- Generate Report -->
             <div class="bg-white rounded-lg shadow-sm p-4">
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+              <div class="grid grid-cols-1 sm:grid-cols-5 gap-2 mb-2">
                 <button onclick="handleGenerateReport(false)" 
                   class="py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-sm">
                   📋 Condensed Report
@@ -5426,27 +5426,49 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                 </button>
                 <button onclick="handleGenerateLLMReport()" 
                   class="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition-colors text-sm">
-                  ✨ Local LLM Note
+                  ✨ Mac LLM Note
+                </button>
+                <button onclick="handleGenerateIPhoneLLMReport()" 
+                  class="py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-colors text-sm">
+                  📱 iPhone LLM Note
+                </button>
+                <button onclick="handleCopyForLocallyAIShortcut()" 
+                  class="py-3 px-4 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg transition-colors text-sm">
+                  🔁 Copy for Shortcut
                 </button>
               </div>
               <p class="text-xs text-gray-500 mb-2">
                 <span class="font-semibold">Condensed:</span> Only filled sections • 
                 <span class="font-semibold">Structured:</span> All headings included •
-                <span class="font-semibold">Local LLM:</span> turns the structured list into prose in this box
+                <span class="font-semibold">Mac LLM:</span> LM Studio on Mac •
+                <span class="font-semibold">iPhone LLM:</span> direct API if available •
+                <span class="font-semibold">Shortcut:</span> copies a prompt for Locally AI / Siri Shortcuts
               </p>
               <details class="mb-3 text-xs text-gray-600 bg-gray-50 border rounded-lg p-3">
-                <summary class="font-semibold cursor-pointer">Local LLM settings</summary>
+                <summary class="font-semibold cursor-pointer">LLM settings</summary>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                   <label class="block">
-                    Endpoint
+                    Mac/LM Studio endpoint
                     <input id="llm-endpoint" class="w-full border rounded px-2 py-1 mt-1" value="http://127.0.0.1:1234/v1/chat/completions">
                   </label>
                   <label class="block">
-                    Model
+                    Mac/LM Studio model
                     <input id="llm-model" class="w-full border rounded px-2 py-1 mt-1" value="local-model">
                   </label>
+                  <label class="block">
+                    iPhone endpoint
+                    <input id="iphone-llm-endpoint" class="w-full border rounded px-2 py-1 mt-1" value="http://127.0.0.1:1234/v1/chat/completions">
+                  </label>
+                  <label class="block">
+                    iPhone model
+                    <input id="iphone-llm-model" class="w-full border rounded px-2 py-1 mt-1" value="local-model">
+                  </label>
                 </div>
-                <p class="mt-2">Default is LM Studio's local OpenAI-compatible server. Ollama can also work if exposed through an OpenAI-compatible endpoint. The text is sent only to the local endpoint shown above.</p>
+                <label class="block mt-2">
+                  Note prompt
+                  <textarea id="llm-prompt" class="w-full border rounded px-2 py-1 mt-1" rows="8">You are an Australian GP. Convert the supplied structured assessment into a concise clinical progress note suitable for Best Practice or MedicalDirector. Plain text only. No markdown. No asterisks. No bullet points. Do not invent findings, diagnoses, medications, investigations or management. Preserve important positives, negatives, observations, investigations, assessment and plan. Use headings only: History, Examination, Investigations, Assessment, Plan. Omit empty sections.</textarea>
+                </label>
+                <p class="mt-2">The Mac button uses LM Studio on the computer endpoint. The iPhone button uses a local iPhone model app only if that app exposes an endpoint to Safari. The Shortcut button copies the full prompt + structured report to the clipboard, then tries to open an Apple Shortcut named <strong>Clinical Note AI</strong>.</p>
               </details>
               
               <div id="report-output" class="hidden mt-4">
@@ -6924,33 +6946,23 @@ Pulmonary embolism</pre>
       document.getElementById('report-output').classList.remove('hidden');
     };
 
-    function buildLocalLLMPrompt() {
-      const structured = generateStructuredReport();
-      return `You are helping a clinician convert a structured clinical assessment list into a concise clinical note.
+    const DEFAULT_LLM_PROMPT = `You are an Australian GP. Convert the supplied structured assessment into a concise clinical progress note suitable for Best Practice or MedicalDirector. Plain text only. No markdown. No asterisks. No bullet points. Do not invent findings, diagnoses, medications, investigations or management. Preserve important positives, negatives, observations, investigations, assessment and plan. Use headings only: History, Examination, Investigations, Assessment, Plan. Omit empty sections.`;
 
-TASK:
-Rewrite the structured content into a readable clinical report/note in prose form.
-
-RULES:
-- Preserve all clinical facts, negatives, positives, vitals, investigations, differentials, diagnoses and plans.
-- Do not invent findings, diagnoses, management, medications or investigations.
-- Keep useful clinical headings.
-- Convert awkward lists into natural prose.
-- Keep it concise and suitable for pasting into a medical record.
-- If a section is empty, omit it.
-- Use Australian clinical wording/spelling.
-
-STRUCTURED CONTENT:
-${structured}`;
+    function getLLMPrompt() {
+      const promptBox = document.getElementById('llm-prompt');
+      const prompt = (promptBox?.value || localStorage.getItem('clinicalToolLLMPrompt') || DEFAULT_LLM_PROMPT).trim();
+      localStorage.setItem('clinicalToolLLMPrompt', prompt);
+      return prompt;
     }
 
-    async function callLocalLLMForReport() {
-      const endpointInput = document.getElementById('llm-endpoint');
-      const modelInput = document.getElementById('llm-model');
-      const endpoint = (endpointInput?.value || 'http://127.0.0.1:1234/v1/chat/completions').trim();
-      const model = (modelInput?.value || 'local-model').trim();
-      localStorage.setItem('localLLMEndpoint', endpoint);
-      localStorage.setItem('localLLMModel', model);
+    function buildLocalLLMPrompt() {
+      const structured = generateStructuredReport();
+      return `${getLLMPrompt()}\n\nSTRUCTURED CONTENT:\n${structured}`;
+    }
+
+    async function callOpenAICompatibleLLM({ endpoint, model, storagePrefix, label }) {
+      localStorage.setItem(`${storagePrefix}Endpoint`, endpoint);
+      localStorage.setItem(`${storagePrefix}Model`, model);
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -6960,7 +6972,7 @@ ${structured}`;
           temperature: 0.2,
           stream: false,
           messages: [
-            { role: 'system', content: 'You write concise, accurate Australian clinical notes. You never add facts that were not provided.' },
+            { role: 'system', content: 'You write concise, accurate Australian clinical notes. You never add facts that were not provided. Output plain text only.' },
             { role: 'user', content: buildLocalLLMPrompt() }
           ]
         })
@@ -6968,32 +6980,97 @@ ${structured}`;
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`Local LLM request failed (${response.status}). ${errorText}`);
+        throw new Error(`${label} request failed (${response.status}). ${errorText}`);
       }
 
       const data = await response.json();
       const text = data?.choices?.[0]?.message?.content || data?.message?.content || data?.response || '';
-      if (!text.trim()) throw new Error('The local LLM returned an empty response.');
-      return text.trim();
+      if (!text.trim()) throw new Error(`${label} returned an empty response.`);
+      return text.trim().replace(/\*\*/g, '').replace(/^#+\s*/gm, '').trim();
+    }
+
+    async function callLocalLLMForReport() {
+      const endpointInput = document.getElementById('llm-endpoint');
+      const modelInput = document.getElementById('llm-model');
+      const endpoint = (endpointInput?.value || 'http://127.0.0.1:1234/v1/chat/completions').trim();
+      const model = (modelInput?.value || 'local-model').trim();
+      return callOpenAICompatibleLLM({ endpoint, model, storagePrefix: 'localLLM', label: 'Mac/LM Studio LLM' });
+    }
+
+    async function callIPhoneLLMForReport() {
+      const endpointInput = document.getElementById('iphone-llm-endpoint');
+      const modelInput = document.getElementById('iphone-llm-model');
+      const endpoint = (endpointInput?.value || 'http://127.0.0.1:1234/v1/chat/completions').trim();
+      const model = (modelInput?.value || 'local-model').trim();
+      return callOpenAICompatibleLLM({ endpoint, model, storagePrefix: 'iphoneLLM', label: 'iPhone LLM' });
+    }
+
+    function loadLLMSettingsFromStorage() {
+      const savedPrompt = localStorage.getItem('clinicalToolLLMPrompt');
+      if (savedPrompt && document.getElementById('llm-prompt')) document.getElementById('llm-prompt').value = savedPrompt;
+      const savedEndpoint = localStorage.getItem('localLLMEndpoint');
+      const savedModel = localStorage.getItem('localLLMModel');
+      if (savedEndpoint && document.getElementById('llm-endpoint')) document.getElementById('llm-endpoint').value = savedEndpoint;
+      if (savedModel && document.getElementById('llm-model')) document.getElementById('llm-model').value = savedModel;
+      const savedIPhoneEndpoint = localStorage.getItem('iphoneLLMEndpoint');
+      const savedIPhoneModel = localStorage.getItem('iphoneLLMModel');
+      if (savedIPhoneEndpoint && document.getElementById('iphone-llm-endpoint')) document.getElementById('iphone-llm-endpoint').value = savedIPhoneEndpoint;
+      if (savedIPhoneModel && document.getElementById('iphone-llm-model')) document.getElementById('iphone-llm-model').value = savedIPhoneModel;
     }
 
     window.handleGenerateLLMReport = async function() {
       const output = document.getElementById('report-output');
       const textarea = document.getElementById('report-text');
       output.classList.remove('hidden');
-      textarea.value = 'Generating prose clinical note with local LLM...';
+      textarea.value = 'Generating prose clinical note with Mac/LM Studio LLM...';
       try {
-        const savedEndpoint = localStorage.getItem('localLLMEndpoint');
-        const savedModel = localStorage.getItem('localLLMModel');
-        if (savedEndpoint && document.getElementById('llm-endpoint')) document.getElementById('llm-endpoint').value = savedEndpoint;
-        if (savedModel && document.getElementById('llm-model')) document.getElementById('llm-model').value = savedModel;
+        loadLLMSettingsFromStorage();
         textarea.value = await callLocalLLMForReport();
       } catch (err) {
         console.error(err);
-        textarea.value = `${generateStructuredReport()}\n\n---\nLOCAL LLM ERROR:\n${err.message}\n\nCheck that LM Studio local server is running, CORS is allowed, and the endpoint/model fields are correct.`;
+        textarea.value = `${generateStructuredReport()}\n\n---\nMAC LLM ERROR:\n${err.message}\n\nCheck LM Studio is running, CORS is allowed, and the endpoint/model fields are correct.`;
       }
     };
 
+    window.handleGenerateIPhoneLLMReport = async function() {
+      const output = document.getElementById('report-output');
+      const textarea = document.getElementById('report-text');
+      output.classList.remove('hidden');
+      textarea.value = 'Generating prose clinical note with iPhone LLM...';
+      try {
+        loadLLMSettingsFromStorage();
+        textarea.value = await callIPhoneLLMForReport();
+      } catch (err) {
+        console.error(err);
+        textarea.value = `${generateStructuredReport()}\n\n---\nIPHONE LLM ERROR:\n${err.message}\n\nThis button only works if the iPhone model app exposes an endpoint to Safari. If the app is chat-only, use the Copy for Shortcut button instead.`;
+      }
+    };
+
+    function buildShortcutPrompt() {
+      return `${getLLMPrompt()}
+
+Convert the following structured assessment into the final clinical note. Return only the note text.
+
+STRUCTURED CONTENT:
+${generateStructuredReport()}`;
+    }
+
+    window.handleCopyForLocallyAIShortcut = function() {
+      const output = document.getElementById('report-output');
+      const textarea = document.getElementById('report-text');
+      output.classList.remove('hidden');
+      const shortcutPrompt = buildShortcutPrompt();
+      textarea.value = shortcutPrompt;
+      const copied = copyToClipboard(shortcutPrompt);
+      if (copied) {
+        const openShortcut = confirm('Prompt copied. Open the Apple Shortcut named “Clinical Note AI” now?');
+        if (openShortcut) {
+          window.location.href = 'shortcuts://run-shortcut?name=Clinical%20Note%20AI&input=clipboard';
+        }
+      } else {
+        alert('Could not copy automatically. Long-press the generated text and copy it manually, then run your Clinical Note AI shortcut.');
+      }
+    };
 
     // iOS-safe clipboard copy with fallback for older Safari / when permissions block
     // Returns true if copy succeeded, false otherwise
