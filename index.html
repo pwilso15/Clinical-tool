@@ -2253,8 +2253,6 @@
         meds: "",
         allergies: "",
         social: "",
-        socialStructured: {}, // Structured social / functional history scaffold
-        structuredPanels: { neuro: { normal: false, findings: {} } }, // Normal-by-exception panels
         demographics: { name: "", age: "", sex: "" },
         vitals: { temp: "", bp: "", dbp: "", hr: "", rr: "", spo2: "" },
         ros: {},
@@ -2718,9 +2716,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
             if (!p.notes) p.notes = {};
             if (!p.differentials) p.differentials = {};
             if (!p.managementPlans) p.managementPlans = {};
-            if (!p.socialStructured) p.socialStructured = {};
-            if (!p.structuredPanels) p.structuredPanels = { neuro: { normal: false, findings: {} } };
-            if (!p.structuredPanels.neuro) p.structuredPanels.neuro = { normal: false, findings: {} };
             if (!p.createdAt) p.createdAt = new Date().toISOString();
           });
         }
@@ -3659,69 +3654,94 @@ What rare or uncommon diagnoses should be considered in the differential for thi
     }
 
     function formatROSProse(rosData, excludeItems = new Set()) {
-      ensureUxRefreshState();
       const positives = [];
       const negatives = [];
-      const normalSystems = [];
-      const exceptSystems = [];
-      const handledNormalSafeKeys = new Set();
-      const customItems = userPreferences.customizations.customROS || [];
-
+      
       ROS_SYSTEMS.forEach(([system, items]) => {
-        const systemPositives = [];
-        const systemNormal = isRosSystemNormal(system);
         items.forEach(([safe, unsafe]) => {
           const key = `ros_${safe}`;
           const state = rosData[key];
           const note = patientData.notes && patientData.notes[key];
+          
+          // Get custom text if available
           const custom = userPreferences.customizations.ros[key] || {};
           const displaySafe = custom.safe || safe;
           const displayUnsafe = custom.unsafe || unsafe;
+          
+          // Skip if already mentioned in features
           const unsafeLower = lowercaseFirst(displayUnsafe);
           const safeLower = lowercaseFirst(displaySafe);
+          
+          // If there's a custom note, always include it (regardless of state)
           if (note) {
-            systemPositives.push(note);
-          } else if (state === 'unsafe' && !excludeItems.has(unsafeLower)) {
-            systemPositives.push(unsafeLower);
-          } else if (state === 'safe' && !systemNormal && !excludeItems.has(safeLower)) {
+            positives.push(note);
+          } else if (state === "unsafe" && !excludeItems.has(unsafeLower)) {
+            positives.push(unsafeLower);
+          } else if (state === "safe" && !excludeItems.has(safeLower)) {
             negatives.push(safeLower);
           }
-          if (systemNormal) handledNormalSafeKeys.add(key);
         });
+      });
+      
+      // Add custom ROS items. Dispatch on buttonType so non-tertiary buttons
+      // (scale, list, severity, duration, pain-scale, binary) render correctly
+      // — for these we synthesize a feature-like object and reuse the same
+      // rendering helpers that presentation features use.
+      (userPreferences.customizations.customROS || []).filter(item => item).forEach(item => {
+        const state = rosData[item.key];
+        const note = patientData.notes && patientData.notes[item.key];
 
-        if (systemNormal) {
-          if (systemPositives.length > 0) {
-            exceptSystems.push(`${system} reviewed and unremarkable except for ${formatList(systemPositives)}`);
-          } else {
-            normalSystems.push(`${system} reviewed and unremarkable`);
-          }
-        } else {
-          positives.push(...systemPositives);
+        // Note takes precedence over state for any buttonType
+        if (note) {
+          positives.push(note);
+          return;
+        }
+
+        // Synthesize a feature-shaped object so renderFeatureValue handles it.
+        // patientData.notes is already checked above; pass an empty notes map
+        // to avoid double-counting.
+        const synthetic = {
+          key: item.key,
+          safe: item.safe,
+          unsafe: item.unsafe,
+          buttonType: item.buttonType || 'tertiary',
+          options: item.options || null
+        };
+        const dataMap = { [item.key]: state };
+        // Save current notes, swap in empty, render, restore
+        const savedNotes = patientData.notes;
+        patientData.notes = {};
+        const rendered = renderFeatureValue(synthetic, dataMap);
+        patientData.notes = savedNotes;
+
+        if (!rendered) return;
+        if (rendered.polarity === 'positive') {
+          positives.push(rendered.text);
+        } else if (rendered.polarity === 'negative') {
+          negatives.push(rendered.text);
         }
       });
 
-      customItems.filter(item => item && item.visible !== false).forEach(item => {
-        const state = rosData[item.key];
-        const note = patientData.notes && patientData.notes[item.key];
-        const systemNormal = item.system && isRosSystemNormal(item.system);
-        const buttonType = item.buttonType || 'tertiary';
-        const synthetic = { key: item.key, safe: item.safe, unsafe: item.unsafe, type: 'ROS', buttonType, options: item.options };
-        const dataMap = Object.assign({}, rosData);
-        const oldNotes = patientData.notes;
-        const rendered = note ? { text: note, polarity: 'positive' } : renderFeatureValue(synthetic, dataMap);
-        patientData.notes = oldNotes;
-        if (!rendered) return;
-        if (systemNormal && rendered.polarity === 'negative') return;
-        if (rendered.polarity === 'positive') positives.push(rendered.text);
-        else if (rendered.polarity === 'negative') negatives.push(rendered.text);
-      });
-
       const sentences = [];
-      if (normalSystems.length > 0) sentences.push(`${formatList(normalSystems)}.`);
-      exceptSystems.forEach(s => sentences.push(`${s}.`));
-      const standard = buildSectionSentence(positives, negatives);
-      if (standard) sentences.push(standard);
-      return sentences.length > 0 ? sentences.join(' ') : null;
+      
+      if (positives.length > 0) {
+        sentences.push(`The patient reported ${formatList(positives)}.`);
+      }
+      
+      if (negatives.length > 0) {
+        // Capitalize first item and list directly without "There were/was"
+        const capitalized = negatives.map((item, index) => 
+          index === 0 ? item.charAt(0).toUpperCase() + item.slice(1) : item
+        );
+        sentences.push(`${formatList(capitalized)}.`);
+      }
+      
+      // Return null if nothing was toggled (so ROS section can be omitted)
+      if (sentences.length === 0) {
+        return null;
+      }
+      
+      return sentences.join(" ");
     }
 
     function formatExamProse(examData, presentation = null) {
@@ -3861,178 +3881,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
       return blocks.length > 0 ? blocks.join('\n') : null;
     }
 
-
-    // ============================================================================
-    // UX REFRESH HELPERS: normal-by-exception + structured panels
-    // ============================================================================
-
-    function ensureUxRefreshState() {
-      if (!patientData.socialStructured) patientData.socialStructured = {};
-      if (!patientData.structuredPanels) patientData.structuredPanels = { neuro: { normal: false, findings: {} } };
-      if (!patientData.structuredPanels.neuro) patientData.structuredPanels.neuro = { normal: false, findings: {} };
-      if (!patientData.structuredPanels.neuro.findings) patientData.structuredPanels.neuro.findings = {};
-    }
-
-    function getRosNormalKey(systemName) {
-      return `ros_normal_${systemName.replace(/[^a-zA-Z0-9]+/g, '_')}`;
-    }
-
-    function isRosSystemNormal(systemName) {
-      ensureUxRefreshState();
-      return !!patientData.ros[getRosNormalKey(systemName)];
-    }
-
-    function getRosSystemExceptionCount(systemName, canonicalItems, customItems = []) {
-      const positives = [];
-      (canonicalItems || []).forEach(([safe, unsafe]) => {
-        const key = `ros_${safe}`;
-        const custom = userPreferences.customizations.ros[key] || {};
-        const label = lowercaseFirst(custom.unsafe || unsafe);
-        if (patientData.ros[key] === 'unsafe') positives.push(label);
-        if (patientData.notes && patientData.notes[key]) positives.push(patientData.notes[key]);
-      });
-      customItems.forEach(item => {
-        const state = patientData.ros[item.key];
-        if (state === 'unsafe') positives.push(lowercaseFirst(item.unsafe || item.safe || 'abnormal finding'));
-        if (patientData.notes && patientData.notes[item.key]) positives.push(patientData.notes[item.key]);
-      });
-      return positives.length;
-    }
-
-    window.toggleROSSystemNormal = function(systemName) {
-      ensureUxRefreshState();
-      const normalKey = getRosNormalKey(systemName);
-      const next = !patientData.ros[normalKey];
-      patientData.ros[normalKey] = next;
-      const system = ROS_SYSTEMS.find(([name]) => name === systemName);
-      if (system) {
-        system[1].forEach(([safe]) => {
-          const key = `ros_${safe}`;
-          if (next && patientData.ros[key] !== 'unsafe') patientData.ros[key] = 'safe';
-          if (!next && patientData.ros[key] === 'safe') patientData.ros[key] = 'null';
-        });
-      }
-      savePatientData();
-      render();
-    };
-
-    window.setECGNormal = function() {
-      INVESTIGATION_TOGGLES.ECG.forEach(toggle => patientData.investigation_toggles[toggle.key] = 1);
-      savePatientData();
-      render();
-      showSaveStatus();
-    };
-
-    window.clearECGPanel = function() {
-      INVESTIGATION_TOGGLES.ECG.forEach(toggle => patientData.investigation_toggles[toggle.key] = 0);
-      patientData.investigations.ecg = '';
-      savePatientData();
-      render();
-      showSaveStatus();
-    };
-
-    window.toggleNeuroNormal = function() {
-      ensureUxRefreshState();
-      const neuro = patientData.structuredPanels.neuro;
-      neuro.normal = !neuro.normal;
-      if (neuro.normal) {
-        neuro.findings = {
-          mental: 'Alert and oriented, language fluent',
-          cn: 'CN II-XII grossly intact',
-          motor: 'Tone and bulk normal; power 5/5 throughout',
-          reflexes: 'Reflexes 2+ and symmetric; plantars downgoing',
-          sensation: 'Sensation intact to light touch, pinprick, vibration and proprioception',
-          coordination: 'Finger-nose and heel-shin intact; no dysdiadochokinesis',
-          gait: 'Gait normal; Romberg negative'
-        };
-      }
-      savePatientData();
-      render();
-      showSaveStatus();
-    };
-
-    window.updateNeuroPanel = function(field, value) {
-      ensureUxRefreshState();
-      patientData.structuredPanels.neuro.findings[field] = value;
-      if (value && value.trim()) patientData.structuredPanels.neuro.normal = true;
-      savePatientData();
-      showSaveStatus();
-    };
-
-    window.updateSocialStructured = function(field, value) {
-      ensureUxRefreshState();
-      patientData.socialStructured[field] = value;
-      savePatientData();
-      showSaveStatus();
-    };
-
-    function formatECGPanel() {
-      const idx = (key) => patientData.investigation_toggles[key] || 0;
-      const val = (key) => {
-        const t = INVESTIGATION_TOGGLES.ECG.find(x => x.key === key);
-        return t ? t.options[idx(key)] : '';
-      };
-      const any = INVESTIGATION_TOGGLES.ECG.some(t => idx(t.key) > 0) || !!patientData.investigations.ecg;
-      if (!any) return null;
-
-      const allNormal = INVESTIGATION_TOGGLES.ECG.every(t => idx(t.key) === 1);
-      if (allNormal && !patientData.investigations.ecg) {
-        return 'ECG: sinus/regular rhythm, normal rate, normal axis, normal PR/QRS/QT intervals, no acute ST-T changes.';
-      }
-
-      const parts = [];
-      if (idx('ecg_rhythm')) parts.push(val('ecg_rhythm'));
-      if (idx('ecg_rate')) parts.push(val('ecg_rate'));
-      if (idx('ecg_axis')) parts.push(val('ecg_axis'));
-      const intervals = [];
-      ['ecg_pr','ecg_qrs','ecg_qt'].forEach(k => { if (idx(k)) intervals.push(val(k)); });
-      if (intervals.length) parts.push(`Intervals: ${intervals.join(', ')}`);
-      const morphology = [];
-      ['ecg_st','ecg_t'].forEach(k => { if (idx(k)) morphology.push(val(k)); });
-      if (morphology.length) parts.push(`Morphology/ST-T: ${morphology.join(', ')}`);
-      if (patientData.investigations.ecg) parts.push(patientData.investigations.ecg);
-      return `ECG: ${parts.join('; ')}.`;
-    }
-
-    function formatNeuroPanel() {
-      ensureUxRefreshState();
-      const neuro = patientData.structuredPanels.neuro;
-      if (!neuro.normal && !Object.values(neuro.findings || {}).some(v => v && v.trim())) return null;
-      const fields = ['mental','cn','motor','reflexes','sensation','coordination','gait'];
-      const text = fields.map(f => (neuro.findings || {})[f]).filter(v => v && v.trim()).join('. ');
-      return text ? `Neurological: ${text}.` : 'Neurological: CN II-XII grossly intact, power 5/5 throughout, reflexes 2+ symmetric, sensation and coordination intact, gait normal.';
-    }
-
-    function formatStructuredSocialHistory() {
-      ensureUxRefreshState();
-      const s = patientData.socialStructured || {};
-      const labels = {
-        living: 'Living situation', employment: 'Occupation/employment', supports: 'Supports/carer role',
-        function: 'Function/ADLs', transport: 'Transport/access', finances: 'Financial strain',
-        food: 'Food security', substances: 'Smoking/alcohol/substances', literacy: 'Health literacy'
-      };
-      const parts = Object.keys(labels)
-        .filter(k => s[k] && s[k].trim())
-        .map(k => `${labels[k]}: ${s[k].trim()}`);
-      return parts.length ? parts.join('; ') : '';
-    }
-
-    function buildAssessmentAndPlanParts() {
-      const out = [];
-      if (!patientData.presentation) return out;
-      const allFeatures = getCustomizedFeatures(patientData.presentation);
-      const ddxFeatures = allFeatures.filter(f => f.type === 'Differential Diagnosis');
-      const confirmed = ddxFeatures.filter(f => patientData.differentials[f.key] === 'diagnosis');
-      confirmed.forEach((feature, i) => {
-        const diagnosisName = (patientData.notes && patientData.notes[feature.key]) || feature.unsafe;
-        const savedPlan = patientData.managementPlans[feature.unsafe];
-        const template = getManagementPlanTemplate(feature.unsafe);
-        const plan = savedPlan || template || '';
-        out.push(`${i + 1}. ${diagnosisName}${plan && plan.trim() ? `\nPlan:\n${plan}` : '\nPlan:'}`);
-      });
-      return out;
-    }
-
     // ============================================================================
     // REPORT GENERATION
     // ============================================================================
@@ -4150,9 +3998,22 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         }
       }
       
-      // ECG structured panel - fixed rate → rhythm → axis → intervals → morphology sequence
-      const ecgPanelText = formatECGPanel();
-      if (ecgPanelText) invParts.push(ecgPanelText);
+      // Add ECG toggle findings if any set
+      const ecgToggles = INVESTIGATION_TOGGLES.ECG
+        .filter(toggle => (patientData.investigation_toggles[toggle.key] || 0) > 0)
+        .map(toggle => {
+          const index = patientData.investigation_toggles[toggle.key];
+          return toggle.options[index];
+        });
+      
+      if (ecgToggles.length > 0 || patientData.investigations.ecg) {
+        let ecgText = "ECG: ";
+        const parts = [];
+        if (ecgToggles.length > 0) parts.push(ecgToggles.join(", "));
+        if (patientData.investigations.ecg) parts.push(patientData.investigations.ecg);
+        ecgText += parts.join(". ");
+        invParts.push(ecgText);
+      }
       
       // Add Urinalysis toggle findings if any set
       const urineToggles = INVESTIGATION_TOGGLES.Urinalysis
@@ -4430,9 +4291,22 @@ What rare or uncommon diagnoses should be considered in the differential for thi
         }
       }
       
-      // ECG structured panel - fixed rate → rhythm → axis → intervals → morphology sequence
-      const ecgPanelText = formatECGPanel();
-      if (ecgPanelText) invParts.push(ecgPanelText);
+      // Add ECG toggle findings if any set
+      const ecgToggles = INVESTIGATION_TOGGLES.ECG
+        .filter(toggle => (patientData.investigation_toggles[toggle.key] || 0) > 0)
+        .map(toggle => {
+          const index = patientData.investigation_toggles[toggle.key];
+          return toggle.options[index];
+        });
+      
+      if (ecgToggles.length > 0 || patientData.investigations.ecg) {
+        let ecgText = "ECG: ";
+        const parts = [];
+        if (ecgToggles.length > 0) parts.push(ecgToggles.join(", "));
+        if (patientData.investigations.ecg) parts.push(patientData.investigations.ecg);
+        ecgText += parts.join(". ");
+        invParts.push(ecgText);
+      }
       
       // Add Urinalysis toggle findings if any set
       const urineToggles = INVESTIGATION_TOGGLES.Urinalysis
@@ -5271,33 +5145,6 @@ What rare or uncommon diagnoses should be considered in the differential for thi
               ${!collapsedSections.examination ? `
               <div class="p-4">
                 <p class="text-xs text-gray-500 mb-3">Tap buttons to toggle: Grey (not examined) → Green (normal) → Red (abnormal) → Grey</p>
-                <div class="mb-4 border rounded-lg p-3 ${patientData.structuredPanels?.neuro?.normal ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}">
-                  <div class="flex items-center justify-between gap-2 mb-2">
-                    <div>
-                      <h3 class="text-sm font-bold text-gray-800">🧠 Neurological exam panel</h3>
-                      <p class="text-xs text-gray-500">One-tap normal neuro, then edit only exceptions.</p>
-                    </div>
-                    <button onclick="toggleNeuroNormal()" class="px-3 py-2 rounded text-xs font-bold ${patientData.structuredPanels?.neuro?.normal ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700'}">
-                      ${patientData.structuredPanels?.neuro?.normal ? 'Normal asserted' : 'Set normal neuro'}
-                    </button>
-                  </div>
-                  ${patientData.structuredPanels?.neuro?.normal ? `
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      ${[
-                        ['mental','Mental status / language'], ['cn','Cranial nerves'], ['motor','Motor / power'],
-                        ['reflexes','Reflexes / plantars'], ['sensation','Sensation'], ['coordination','Coordination'], ['gait','Gait / station']
-                      ].map(([field,label]) => `
-                        <div>
-                          <label class="block text-xs font-medium text-gray-700 mb-1">${label}</label>
-                          <input type="text" value="${patientData.structuredPanels?.neuro?.findings?.[field] || ''}"
-                            onchange="updateNeuroPanel('${field}', this.value)"
-                            class="w-full px-2 py-1.5 border rounded focus:ring-2 focus:ring-green-500 text-xs"
-                            placeholder="Normal or exception...">
-                        </div>
-                      `).join('')}
-                    </div>
-                  ` : ''}
-                </div>
               ${(() => {
                 // Build the list of sections to render: canonical EXAM_SECTIONS first,
                 // then any custom sections discovered in customExam items, in first-
@@ -5396,16 +5243,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                 
                 <!-- ECG Toggles -->
                 <div class="border rounded-lg p-3 bg-blue-50">
-                  <div class="flex items-center justify-between gap-2 mb-2">
-                    <div>
-                      <label class="block text-sm font-bold text-gray-800">⚡ ECG structured panel</label>
-                      <p class="text-xs text-gray-500">Rate → rhythm → axis → intervals → morphology → ischaemia.</p>
-                    </div>
-                    <div class="flex gap-2">
-                      <button onclick="setECGNormal()" class="px-2 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-bold">Normal ECG</button>
-                      <button onclick="clearECGPanel()" class="px-2 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-bold">Clear</button>
-                    </div>
-                  </div>
+                  <label class="block text-sm font-bold text-gray-800 mb-2">⚡ ECG - Quick Toggles</label>
                   <div class="grid grid-cols-2 gap-2 mb-2">
                     ${INVESTIGATION_TOGGLES.ECG.map(toggle => {
                       const currentIndex = patientData.investigation_toggles[toggle.key] || 0;
@@ -5544,8 +5382,8 @@ What rare or uncommon diagnoses should be considered in the differential for thi
               
               return `
               <div class="bg-white rounded-lg shadow-sm p-4">
-                <h2 class="text-lg font-bold text-gray-800 mb-3">📋 Assessment & Plan</h2>
-                <p class="text-xs text-gray-500 mb-4">Each confirmed diagnosis carries its own inline plan.</p>
+                <h2 class="text-lg font-bold text-gray-800 mb-3">📋 Management Plan</h2>
+                <p class="text-xs text-gray-500 mb-4">Edit management plans for confirmed diagnoses</p>
                 <div class="space-y-4">
                   ${confirmedDiagnoses.map(feature => {
                     const diagnosisName = feature.unsafe;
@@ -5577,7 +5415,7 @@ What rare or uncommon diagnoses should be considered in the differential for thi
 
             <!-- Generate Report -->
             <div class="bg-white rounded-lg shadow-sm p-4">
-              <div class="grid grid-cols-2 gap-2 mb-2">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                 <button onclick="handleGenerateReport(false)" 
                   class="py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-sm">
                   📋 Condensed Report
@@ -5586,11 +5424,30 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   class="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors text-sm">
                   📄 Structured Report
                 </button>
+                <button onclick="handleGenerateLLMReport()" 
+                  class="py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition-colors text-sm">
+                  ✨ Local LLM Note
+                </button>
               </div>
               <p class="text-xs text-gray-500 mb-2">
                 <span class="font-semibold">Condensed:</span> Only filled sections • 
-                <span class="font-semibold">Structured:</span> All headings included
+                <span class="font-semibold">Structured:</span> All headings included •
+                <span class="font-semibold">Local LLM:</span> turns the structured list into prose in this box
               </p>
+              <details class="mb-3 text-xs text-gray-600 bg-gray-50 border rounded-lg p-3">
+                <summary class="font-semibold cursor-pointer">Local LLM settings</summary>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                  <label class="block">
+                    Endpoint
+                    <input id="llm-endpoint" class="w-full border rounded px-2 py-1 mt-1" value="http://127.0.0.1:1234/v1/chat/completions">
+                  </label>
+                  <label class="block">
+                    Model
+                    <input id="llm-model" class="w-full border rounded px-2 py-1 mt-1" value="local-model">
+                  </label>
+                </div>
+                <p class="mt-2">Default is LM Studio's local OpenAI-compatible server. Ollama can also work if exposed through an OpenAI-compatible endpoint. The text is sent only to the local endpoint shown above.</p>
+              </details>
               
               <div id="report-output" class="hidden mt-4">
                 <h3 class="text-sm font-bold text-gray-700 mb-2">Generated Report (Editable)</h3>
@@ -7066,6 +6923,77 @@ Pulmonary embolism</pre>
       document.getElementById('report-text').value = report;
       document.getElementById('report-output').classList.remove('hidden');
     };
+
+    function buildLocalLLMPrompt() {
+      const structured = generateStructuredReport();
+      return `You are helping a clinician convert a structured clinical assessment list into a concise clinical note.
+
+TASK:
+Rewrite the structured content into a readable clinical report/note in prose form.
+
+RULES:
+- Preserve all clinical facts, negatives, positives, vitals, investigations, differentials, diagnoses and plans.
+- Do not invent findings, diagnoses, management, medications or investigations.
+- Keep useful clinical headings.
+- Convert awkward lists into natural prose.
+- Keep it concise and suitable for pasting into a medical record.
+- If a section is empty, omit it.
+- Use Australian clinical wording/spelling.
+
+STRUCTURED CONTENT:
+${structured}`;
+    }
+
+    async function callLocalLLMForReport() {
+      const endpointInput = document.getElementById('llm-endpoint');
+      const modelInput = document.getElementById('llm-model');
+      const endpoint = (endpointInput?.value || 'http://127.0.0.1:1234/v1/chat/completions').trim();
+      const model = (modelInput?.value || 'local-model').trim();
+      localStorage.setItem('localLLMEndpoint', endpoint);
+      localStorage.setItem('localLLMModel', model);
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          stream: false,
+          messages: [
+            { role: 'system', content: 'You write concise, accurate Australian clinical notes. You never add facts that were not provided.' },
+            { role: 'user', content: buildLocalLLMPrompt() }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Local LLM request failed (${response.status}). ${errorText}`);
+      }
+
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content || data?.message?.content || data?.response || '';
+      if (!text.trim()) throw new Error('The local LLM returned an empty response.');
+      return text.trim();
+    }
+
+    window.handleGenerateLLMReport = async function() {
+      const output = document.getElementById('report-output');
+      const textarea = document.getElementById('report-text');
+      output.classList.remove('hidden');
+      textarea.value = 'Generating prose clinical note with local LLM...';
+      try {
+        const savedEndpoint = localStorage.getItem('localLLMEndpoint');
+        const savedModel = localStorage.getItem('localLLMModel');
+        if (savedEndpoint && document.getElementById('llm-endpoint')) document.getElementById('llm-endpoint').value = savedEndpoint;
+        if (savedModel && document.getElementById('llm-model')) document.getElementById('llm-model').value = savedModel;
+        textarea.value = await callLocalLLMForReport();
+      } catch (err) {
+        console.error(err);
+        textarea.value = `${generateStructuredReport()}\n\n---\nLOCAL LLM ERROR:\n${err.message}\n\nCheck that LM Studio local server is running, CORS is allowed, and the endpoint/model fields are correct.`;
+      }
+    };
+
 
     // iOS-safe clipboard copy with fallback for older Safari / when permissions block
     // Returns true if copy succeeded, false otherwise
