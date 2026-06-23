@@ -4679,6 +4679,9 @@ What rare or uncommon diagnoses should be considered in the differential for thi
                   <button onclick="popOutOE()" class="px-2 py-1.5 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
                     🔬 OpenEvidence
                   </button>
+                  <button onclick="openClinicalSearch()" class="px-2 py-1.5 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200 transition-colors">
+                    🔎 Clinical Search
+                  </button>
                   <button onclick="exportConfig()" class="px-2 py-1.5 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors">
                     📤 Export
                   </button>
@@ -7217,6 +7220,48 @@ ${generateStructuredReport()}`;
         'OpenEvidence',
         `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
       );
+    };
+
+
+    // Google Programmable Search pop-out handler
+    window.openClinicalSearch = function() {
+      const width = 1100;
+      const height = 800;
+      const left = (screen.width - width) / 2;
+      const top = (screen.height - height) / 2;
+
+      const searchWindow = window.open(
+        '',
+        'ClinicalSearch',
+        `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+      );
+
+      if (!searchWindow) {
+        alert('Popup blocked. Please allow popups for this site, then try Clinical Search again.');
+        return;
+      }
+
+      searchWindow.document.open();
+      searchWindow.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clinical Search</title>
+  <script src="https://cdn.tailwindcss.com"><\/script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <main class="max-w-5xl mx-auto p-4 sm:p-6">
+    <section class="bg-white rounded-xl shadow p-4 sm:p-6">
+      <h1 class="text-2xl font-bold text-gray-900 mb-2">Clinical Search</h1>
+      <p class="text-gray-600 mb-4">Search selected clinical resources using your Google Programmable Search Engine.</p>
+      <script async src="https://cse.google.com/cse.js?cx=f4f346d85e31d4326"><\/script>
+      <div class="gcse-search"></div>
+    </section>
+  </main>
+</body>
+</html>`);
+      searchWindow.document.close();
     };
 
     window.showOEQuery = function(type) {
